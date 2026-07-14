@@ -1,0 +1,50 @@
+{
+  "name": "cost-aware-router",
+  "displayName": "Modelglass Cost-Aware Router",
+  "description": "Route dev tasks to the cheapest LLM that clears a confirmed benchmark bar, using the live Modelglass pricing feed.",
+  "version": "0.1.0",
+  "publisher": "modelglass",
+  "license": "MIT",
+  "type": "module",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Modelglass/modelglass-vscode"
+  },
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=20"
+  },
+  "categories": ["Other", "Machine Learning"],
+  "keywords": ["llm", "cost", "routing", "pricing", "ai"],
+  "activationEvents": [],
+  "main": "./dist/extension.cjs",
+  "contributes": {
+    "commands": [
+      {
+        "command": "modelglass.routeTask",
+        "title": "Modelglass: Route Task to Cheapest Capable Model"
+      },
+      {
+        "command": "modelglass.setApiKey",
+        "title": "Modelglass: Set API Key"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx/esm --test src/*.test.ts",
+    "package": "npm run build && vsce package",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
