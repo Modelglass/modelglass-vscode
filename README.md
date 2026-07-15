@@ -4,15 +4,7 @@ A VS Code extension that routes a task to the cheapest LLM that clears a
 confirmed benchmark bar, using the live [Modelglass](https://modelglass.com.au)
 pricing and capability feed.
 
-<!--
-TODO (needs a real asset, not fabricated here — flag for Scott/Simone):
-a screenshot or short GIF of the "Route Task" flow (task description prompt
--> quality-bar-aware recommendation) belongs here before Marketplace
-submission. Marketplace listings render this README directly, and a visual
-of the actual recommendation output is the single highest-value addition
-once one exists. Suggested path once captured: docs/screenshot.png,
-referenced here as ![Modelglass: Route Task recommendation](docs/screenshot.png)
--->
+![Modelglass: Route Task recommendation](docs/screenshot.png)
 
 ## What it does
 
