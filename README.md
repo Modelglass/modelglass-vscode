@@ -49,6 +49,8 @@ let you enter a key manually instead.
 | **Modelglass: Compare Two Models** | Grounded migration diff between two models — pick a "from" model, then a "to" model (or the feed's own suggested competitors). Reports the unit-matched price delta and price *stability* (from the append-only price history), a per-dimension capability diff, billing-unit change warnings, and lifecycle checks, in the **Modelglass** Output panel. Works across image/llm/video/audio, and on every plan tier including Free. |
 | **Modelglass: Set API Key** | Enter an existing Modelglass API key, or clear the stored one (forcing re-provisioning on next use). |
 
+![Modelglass: Compare Two Models diff output](docs/screenshot-compare.png)
+
 ## Scope (v1 / MVP)
 
 - **Route Task** is LLM routing only (coding + writing/general) — no image,
