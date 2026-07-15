@@ -3,6 +3,7 @@ import { clearApiKey, ensureApiKey, promptForKey } from "./auth.js";
 import { fetchLLMModels } from "./lib.js";
 import { promptForSubtask } from "./task.js";
 import { showRecommendation } from "./recommend.js";
+import { switchCheck } from "./switch-check.js";
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
@@ -42,6 +43,8 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showInformationMessage("Modelglass: API key cleared.");
       }
     }),
+
+    vscode.commands.registerCommand("modelglass.compareModels", () => switchCheck(context)),
   );
 }
 

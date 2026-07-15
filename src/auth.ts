@@ -25,7 +25,13 @@ type ProvisionResult =
   | { ok: true; key: string }
   | { ok: false; reason: "network" | "rate_limited" | "other"; message: string };
 
-const output = vscode.window.createOutputChannel("Modelglass");
+/**
+ * Shared across every command (SCO-216) — one "Modelglass" channel a user
+ * finds in one place, rather than a per-command channel they'd have to know
+ * to switch between. Created here since auth (this module) always runs
+ * first on any command's first activation.
+ */
+export const output = vscode.window.createOutputChannel("Modelglass");
 
 async function callProvision(): Promise<ProvisionResult> {
   let res: Response;
