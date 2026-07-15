@@ -30,6 +30,10 @@
         "title": "Modelglass: Route Task to Cheapest Capable Model"
       },
       {
+        "command": "modelglass.compareModels",
+        "title": "Modelglass: Compare Two Models"
+      },
+      {
         "command": "modelglass.setApiKey",
         "title": "Modelglass: Set API Key"
       }

@@ -54,13 +54,15 @@ let you enter a key manually instead.
 | Command | What it does |
 |---|---|
 | **Modelglass: Route Task to Cheapest Capable Model** | Prompts for a task description, then recommends the cheapest LLM that clears the relevant quality bar for it. |
+| **Modelglass: Compare Two Models** | Grounded migration diff between two models — pick a "from" model, then a "to" model (or the feed's own suggested competitors). Reports the unit-matched price delta and price *stability* (from the append-only price history), a per-dimension capability diff, billing-unit change warnings, and lifecycle checks, in the **Modelglass** Output panel. Works across image/llm/video/audio, and on every plan tier including Free. |
 | **Modelglass: Set API Key** | Enter an existing Modelglass API key, or clear the stored one (forcing re-provisioning on next use). |
 
 ## Scope (v1 / MVP)
 
-- LLM routing only (coding + writing/general) — no image, video, or audio
-  modality. The underlying feed covers those too; this extension doesn't
-  surface them yet.
+- **Route Task** is LLM routing only (coding + writing/general) — no image,
+  video, or audio modality there. **Compare Two Models** is cross-modality
+  (image/llm/video/audio all resolve) — a migration diff doesn't need to pick
+  a "best" model the way routing does, so there's no reason to scope it down.
 - Single-subtask routing — "what should I use for this next chunk of work,"
   once per invocation. The CLI's full multi-subtask task/JSON-file/cost-table
   view is not reproduced here.
