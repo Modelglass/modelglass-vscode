@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-07-15
 
 - `Modelglass: Compare Two Models` (SCO-216) — grounded model-migration diff,
   vendored from `modelglass-router-examples/switch-check`: unit-matched price
@@ -12,7 +12,7 @@
   works on every plan tier including Free — reuses the existing
   auto-provisioned key, no new auth.
 
-## 0.1.0 — Unreleased
+## 0.1.0 — 2026-07-15
 
 Initial MVP (SCO-211):
 

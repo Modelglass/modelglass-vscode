@@ -2,7 +2,7 @@
   "name": "cost-aware-router",
   "displayName": "Modelglass Cost-Aware Router",
   "description": "Route dev tasks to the cheapest LLM that clears a confirmed benchmark bar, using the live Modelglass pricing feed.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "modelglass",
   "license": "MIT",
   "type": "module",
