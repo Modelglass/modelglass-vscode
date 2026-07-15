@@ -11,6 +11,10 @@
     "type": "git",
     "url": "https://github.com/Modelglass/modelglass-vscode"
   },
+  "bugs": {
+    "url": "https://github.com/Modelglass/modelglass-vscode/issues"
+  },
+  "homepage": "https://github.com/Modelglass/modelglass-vscode#readme",
   "engines": {
     "vscode": "^1.85.0",
     "node": ">=20"
