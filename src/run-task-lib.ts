@@ -1,12 +1,12 @@
 import {
   fetchLLMModels,
   normalise,
-  rankModelsForCategory,
   type LeafTaskCategory,
   type RoutableModel,
 } from "./routing-engine.js";
 import { executeProviderCall, ProviderExecutionError, type ExecuteResult } from "./provider-execute.js";
 import type { SupportedProvider } from "./provider-keys-lib.js";
+import { resolveCategoryRanking, type RoutingRule } from "./routing-rules-lib.js";
 
 /**
  * SCO-232 — Starter tier: single-key setup + fixed routing. Pure half (no
@@ -54,6 +54,9 @@ export type RouteAndExecuteOutcome =
       topModel: RoutableModel;
       rankedCount: number;
       execution: ExecuteResult;
+      /** SCO-231 — whether a .modelglass/routing-rules.json rule changed
+       *  this category's ranking (vs. SCO-230's default engine, untouched). */
+      ruleApplied: boolean;
     }
   | {
       outcome: "no-provider-models";
@@ -80,17 +83,26 @@ export type ExecuteFn = (
 ) => Promise<ExecuteResult>;
 
 /**
- * Filters the model pool to the configured provider, ranks by
- * SCO-230's rankModelsForCategory, and executes the call against the
- * top-ranked model. `executeFn` is injectable (defaults to the real
- * provider-execute.ts adapter) so tests can supply a stub — no live network
- * call, no live key needed to exercise this path.
+ * Filters the model pool to the configured provider, ranks by SCO-230's
+ * rankModelsForCategory — or, if `rule` is supplied (SCO-231), by
+ * resolveCategoryRanking's rule-composed ranking, which falls through to
+ * the exact same default engine when the rule doesn't fully override this
+ * category — and executes the call against the top-ranked model.
+ * `executeFn` is injectable (defaults to the real provider-execute.ts
+ * adapter) so tests can supply a stub — no live network call, no live key
+ * needed to exercise this path.
+ *
+ * `rule` defaults to undefined, so every existing SCO-232 call site/test
+ * (no rule argument) behaves identically to before SCO-231 — passing
+ * undefined through resolveCategoryRanking is defined to be exactly
+ * rankModelsForCategory, unmodified.
  *
  * Starter's no-retry failure contract (ADR-0012) lives here: on an
  * execution failure, this returns a single "execution-failed" outcome and
  * does NOT attempt a second model or a second call — one attempt per
  * invocation, full stop. The caller (the vscode command in run-task.ts)
- * surfaces it; nothing here loops.
+ * surfaces it; nothing here loops. (No Pro-tier gating on rule application
+ * itself — SCO-234's scope, not this card's; see run-task.ts's header.)
  */
 export async function routeAndExecute(
   allModels: RoutableModel[],
@@ -99,13 +111,14 @@ export async function routeAndExecute(
   category: LeafTaskCategory,
   prompt: string,
   executeFn: ExecuteFn = executeProviderCall,
+  rule?: RoutingRule,
 ): Promise<RouteAndExecuteOutcome> {
   const providerModels = allModels.filter((m) => m.provider === provider);
   if (providerModels.length === 0) {
     return { outcome: "no-provider-models", category, provider };
   }
 
-  const ranking = rankModelsForCategory(providerModels, category);
+  const ranking = resolveCategoryRanking(providerModels, category, rule);
   const top = ranking.ranked[0];
   if (!top) {
     return { outcome: "no-ranked-models", category, provider };
@@ -113,7 +126,14 @@ export async function routeAndExecute(
 
   try {
     const execution = await executeFn(provider, providerApiKey, top.model.modelId, prompt);
-    return { outcome: "success", category, topModel: top.model, rankedCount: ranking.ranked.length, execution };
+    return {
+      outcome: "success",
+      category,
+      topModel: top.model,
+      rankedCount: ranking.ranked.length,
+      execution,
+      ruleApplied: ranking.ruleApplied,
+    };
   } catch (e) {
     const error =
       e instanceof ProviderExecutionError
