@@ -1,0 +1,78 @@
+import * as vscode from "vscode";
+import { output } from "./auth.js";
+import {
+  PROVIDER_LABELS,
+  SUPPORTED_PROVIDERS,
+  clearProviderKey,
+  getConfiguredProvider,
+  setProviderKeyValue,
+} from "./provider-keys-lib.js";
+
+/**
+ * SCO-232 — vscode-coupled provider-key prompting UI. The pure storage logic
+ * lives in ./provider-keys-lib.ts (no vscode import there, so it's directly
+ * unit-testable); this file is the thin glue, not tested directly — same
+ * split as switch-check-lib.ts/switch-check.ts and lib.ts/task.ts.
+ */
+
+/**
+ * "Modelglass: Set Provider API Key" (SCO-232) — pick a supported provider,
+ * enter its key, store it. If a different provider was already configured,
+ * warns before replacing it (Starter's single-key invariant made visible to
+ * the user, not just silently enforced underneath them).
+ */
+export async function promptAndSetProviderKey(context: vscode.ExtensionContext): Promise<void> {
+  const existing = await getConfiguredProvider(context.secrets);
+
+  const picked = await vscode.window.showQuickPick(
+    SUPPORTED_PROVIDERS.map((p) => ({
+      label: PROVIDER_LABELS[p],
+      description: p === existing?.provider ? "(currently configured)" : undefined,
+      provider: p,
+    })),
+    { title: "Modelglass: Set Provider API Key — Choose a provider" },
+  );
+  if (!picked) return;
+
+  if (existing && existing.provider !== picked.provider) {
+    const choice = await vscode.window.showWarningMessage(
+      `Modelglass: Starter supports one provider key at a time. You currently have a ` +
+        `${PROVIDER_LABELS[existing.provider]} key configured — setting a ${PROVIDER_LABELS[picked.provider]} ` +
+        `key will remove it.`,
+      "Continue",
+      "Cancel",
+    );
+    if (choice !== "Continue") return;
+  }
+
+  const apiKey = await vscode.window.showInputBox({
+    title: `Modelglass: ${PROVIDER_LABELS[picked.provider]} API Key`,
+    prompt: `Paste your ${PROVIDER_LABELS[picked.provider]} API key. Stored only in this machine's ` +
+      "SecretStorage (OS keychain) — never sent to Modelglass.",
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: (value) => (value.trim() ? undefined : "API key can't be empty"),
+  });
+  if (!apiKey) return;
+
+  const { replaced } = await setProviderKeyValue(context.secrets, picked.provider, apiKey);
+  output.appendLine(
+    `[provider-keys] stored a ${picked.provider} key` +
+      (replaced ? ` (replaced the previously-configured ${replaced} key)` : ""),
+  );
+  vscode.window.showInformationMessage(
+    `Modelglass: ${PROVIDER_LABELS[picked.provider]} key saved.` +
+      (replaced ? ` Your previous ${PROVIDER_LABELS[replaced]} key was removed.` : ""),
+  );
+}
+
+export async function promptAndClearProviderKey(context: vscode.ExtensionContext): Promise<void> {
+  const existing = await getConfiguredProvider(context.secrets);
+  if (!existing) {
+    vscode.window.showInformationMessage("Modelglass: no provider key is currently configured.");
+    return;
+  }
+  await clearProviderKey(context.secrets, existing.provider);
+  output.appendLine(`[provider-keys] cleared the ${existing.provider} key`);
+  vscode.window.showInformationMessage(`Modelglass: ${PROVIDER_LABELS[existing.provider]} key cleared.`);
+}
