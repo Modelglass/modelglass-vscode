@@ -82,6 +82,105 @@ export type ExecuteFn = (
   prompt: string,
 ) => Promise<ExecuteResult>;
 
+// ---------------------------------------------------------------------------
+// SCO-233 (Pro) — multi-key fallback chain. Extends routeAndExecute rather
+// than duplicating its orchestration: routeAndExecuteWithFallback below
+// calls the SAME routeAndExecute once per provider in the chain, unchanged.
+// routeAndExecute itself is untouched — its signature, behavior, and every
+// existing SCO-232/SCO-231 test against it keep passing unmodified.
+// ---------------------------------------------------------------------------
+
+export interface ConfiguredProviderKey {
+  provider: SupportedProvider;
+  apiKey: string;
+}
+
+export interface ProviderAttempt {
+  provider: SupportedProvider;
+  result: RouteAndExecuteOutcome;
+}
+
+export type FallbackOutcome =
+  | ({ outcome: "success"; attempts: ProviderAttempt[] } & Extract<RouteAndExecuteOutcome, { outcome: "success" }>)
+  | { outcome: "no-configured-providers"; category: LeafTaskCategory }
+  | { outcome: "no-ranked-models"; category: LeafTaskCategory }
+  | { outcome: "all-providers-failed"; category: LeafTaskCategory; attempts: ProviderAttempt[] };
+
+/**
+ * SCO-233 fallback contract, decided here (flagged per the card's own
+ * request to flag ambiguous design calls rather than pick silently):
+ *
+ * "Next in chain" means the next-ranked model on a DIFFERENT configured
+ * provider, never a second model on a provider that already failed. ADR-0012's
+ * four failure kinds (invalid-key, rate-limited, network-error,
+ * provider-error) are ALL connection/key-level failures, not per-model ones —
+ * an invalid key or a rate limit applies identically to every model call
+ * against that same host. Retrying a second model on the SAME provider after
+ * any of these would almost certainly reproduce the identical failure, which
+ * is exactly the "pointless retry" the card asks to avoid. So the chain is
+ * built by ranking ALL configured providers' models together for this
+ * category (via resolveCategoryRanking — the same rule-composed ranking
+ * SCO-231 already built, so an excludeProviders/priority rule composes here
+ * for free), then deduping to one entry per provider — that provider's own
+ * top-ranked model — in first-occurrence order. Each provider is tried AT
+ * MOST ONCE. This is also the attempt cap (item 3): chain length is bounded
+ * by the number of DISTINCT configured providers with at least one ranked
+ * model for this category, never more — "try every configured provider once,
+ * in ranked order, then surface the final failure," exactly as suggested.
+ *
+ * Chain-order UX (item 4): zero-config default is simply the combined
+ * ranking's provider order — no manual setup needed for working fallback.
+ * Manual override is ALREADY available, additively, via SCO-231's existing
+ * `priority` rule: since resolveCategoryRanking (rule-aware) is what
+ * determines chain order here, a user who writes a `priority` list for a
+ * category directly controls fallback order too — no new config surface was
+ * built for this, reusing SCO-231's mechanism instead of inventing a second
+ * one.
+ */
+export async function routeAndExecuteWithFallback(
+  allModels: RoutableModel[],
+  configuredProviders: ConfiguredProviderKey[],
+  category: LeafTaskCategory,
+  prompt: string,
+  executeFn: ExecuteFn = executeProviderCall,
+  rule?: RoutingRule,
+): Promise<FallbackOutcome> {
+  if (configuredProviders.length === 0) {
+    return { outcome: "no-configured-providers", category };
+  }
+
+  const configuredSet = new Set(configuredProviders.map((c) => c.provider));
+  const combinedPool = allModels.filter((m) => configuredSet.has(m.provider as SupportedProvider));
+  const combinedRanking = resolveCategoryRanking(combinedPool, category, rule);
+
+  const chainOrder: SupportedProvider[] = [];
+  for (const ranked of combinedRanking.ranked) {
+    const provider = ranked.model.provider as SupportedProvider;
+    if (!chainOrder.includes(provider)) chainOrder.push(provider);
+  }
+
+  if (chainOrder.length === 0) {
+    return { outcome: "no-ranked-models", category };
+  }
+
+  const keyByProvider = new Map(configuredProviders.map((c) => [c.provider, c.apiKey]));
+  const attempts: ProviderAttempt[] = [];
+
+  for (const provider of chainOrder) {
+    const apiKey = keyByProvider.get(provider)!;
+    const result = await routeAndExecute(allModels, provider, apiKey, category, prompt, executeFn, rule);
+    attempts.push({ provider, result });
+    if (result.outcome === "success") {
+      return { ...result, attempts };
+    }
+    // execution-failed, or (defensively) no-ranked-models if this provider's
+    // own pool somehow scored nothing despite appearing in the combined
+    // ranking — either way, fall through to the next provider in the chain.
+  }
+
+  return { outcome: "all-providers-failed", category, attempts };
+}
+
 /**
  * Filters the model pool to the configured provider, ranks by SCO-230's
  * rankModelsForCategory — or, if `rule` is supplied (SCO-231), by

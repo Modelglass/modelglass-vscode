@@ -44,6 +44,10 @@
       {
         "command": "modelglass.runTask",
         "title": "Modelglass: Run Task on Cheapest Capable Model"
+      },
+      {
+        "command": "modelglass.addProviderKey",
+        "title": "Modelglass: Add Provider API Key"
       }
     ]
   },

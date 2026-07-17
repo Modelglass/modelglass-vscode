@@ -2,29 +2,37 @@ import * as vscode from "vscode";
 import { ensureApiKey, output } from "./auth.js";
 import type { LeafTaskCategory, RoutableModel } from "./routing-engine.js";
 import { promptAndSetProviderKey } from "./provider-keys.js";
-import { getConfiguredProvider } from "./provider-keys-lib.js";
+import { getConfiguredProviders } from "./provider-keys-lib.js";
 import {
   CATEGORY_LABELS,
   LEAF_CATEGORIES,
   describeFailure,
   fetchRoutableModels,
-  routeAndExecute,
+  routeAndExecuteWithFallback,
 } from "./run-task-lib.js";
 import { loadRoutingRules } from "./routing-rules.js";
 
 /**
  * SCO-232 — vscode-coupled command: "Modelglass: Run Task on Cheapest
- * Capable Model". The testable orchestration core (routeAndExecute and
- * friends) lives in ./run-task-lib.ts; this file is the thin glue — QuickPick
- * prompting, progress notification, output-channel reporting — and is not
- * tested directly, same convention as switch-check.ts/recommend.ts.
+ * Capable Model". The testable orchestration core (routeAndExecuteWithFallback
+ * and friends) lives in ./run-task-lib.ts; this file is the thin glue —
+ * QuickPick prompting, progress notification, output-channel reporting —
+ * and is not tested directly, same convention as switch-check.ts/recommend.ts.
  *
  * SCO-231 (Pro scope) adds an optional .modelglass/routing-rules.json
- * override, loaded here and passed through to routeAndExecute. No tier
- * gating is applied — this runs for any plan today. Gating Pro-only
- * features behind an actual plan check is SCO-234's separate scope;
- * guessing at how to check Pro status here would risk conflicting with
- * however that card ends up wiring it, so it's deliberately left undone.
+ * override, loaded here and passed through. No tier gating is applied — this
+ * runs for any plan today. Gating Pro-only features behind an actual plan
+ * check is SCO-234's separate scope; guessing at how to check Pro status
+ * here would risk conflicting with however that card ends up wiring it, so
+ * it's deliberately left undone.
+ *
+ * SCO-233 (Pro scope) always routes through routeAndExecuteWithFallback now,
+ * regardless of how many provider keys are configured — with exactly one
+ * key configured (Starter's usual case) the fallback chain has exactly one
+ * entry, so behavior is unchanged from before: one attempt, immediately
+ * surfaced failure, no retry. run-task-lib.ts's own routeAndExecute (the
+ * single-provider function SCO-232/231's tests exercise) is untouched and
+ * still the thing routeAndExecuteWithFallback calls under the hood.
  */
 
 async function promptForCategory(): Promise<LeafTaskCategory | undefined> {
@@ -36,8 +44,8 @@ async function promptForCategory(): Promise<LeafTaskCategory | undefined> {
 }
 
 export async function runTask(context: vscode.ExtensionContext): Promise<void> {
-  const configured = await getConfiguredProvider(context.secrets);
-  if (!configured) {
+  const configuredProviders = await getConfiguredProviders(context.secrets);
+  if (configuredProviders.length === 0) {
     const choice = await vscode.window.showWarningMessage(
       "Modelglass: no provider API key is configured yet — set one first.",
       "Set Provider API Key",
@@ -59,7 +67,7 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
   if (!prompt) return;
 
   const modelglassApiKey = await ensureApiKey(context);
-  if (!modelglassApiKey) return; // free Modelglass key is for reading pricing/benchmark data, distinct from the provider key above
+  if (!modelglassApiKey) return; // free Modelglass key is for reading pricing/benchmark data, distinct from the provider key(s) above
 
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Modelglass: routing and running your task…" },
@@ -77,10 +85,9 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
       const rules = await loadRoutingRules();
       const rule = rules.found ? rules.rulesByCategory.get(category) : undefined;
 
-      const result = await routeAndExecute(
+      const result = await routeAndExecuteWithFallback(
         allModels,
-        configured.provider,
-        configured.apiKey,
+        configuredProviders,
         category,
         prompt.trim(),
         undefined,
@@ -88,31 +95,32 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
       );
 
       switch (result.outcome) {
-        case "no-provider-models":
-          vscode.window.showErrorMessage(
-            `Modelglass: no current-generation models found for ${result.provider} in the pricing feed.`,
-          );
+        case "no-configured-providers":
+          // Unreachable in practice — the zero-key check above already
+          // returned early — but handled rather than assumed impossible.
+          vscode.window.showErrorMessage("Modelglass: no provider API key is configured.");
           return;
         case "no-ranked-models":
           vscode.window.showErrorMessage(
-            `Modelglass: none of ${result.provider}'s models have scoring data for "${CATEGORY_LABELS[result.category]}".`,
+            `Modelglass: none of your configured providers' models have scoring data for "${CATEGORY_LABELS[result.category]}".`,
           );
           return;
-        case "execution-failed":
-          output.appendLine(
-            `[run-task] execution failed for ${result.topModel.modelId} (${result.error.kind}): ${result.error.message}`,
-          );
-          // ADR-0012 Starter contract: surface clearly, no auto-retry/fallback —
-          // that behaviour is Pro/SCO-233's, not built here even partially.
+        case "all-providers-failed": {
+          const summary = result.attempts
+            .map((a) => `${a.provider}: ${a.result.outcome === "execution-failed" ? describeFailure(a.result.error) : a.result.outcome}`)
+            .join("; ");
+          output.appendLine(`[run-task] every configured provider failed for "${CATEGORY_LABELS[result.category]}" — ${summary}`);
           vscode.window.showErrorMessage(
-            `Modelglass: routed to ${result.topModel.name}, but the call failed — ${describeFailure(result.error)}. ` +
-              "No automatic retry was attempted (Starter runs one attempt per invocation) — fix the key or try again by re-running the command.",
+            `Modelglass: tried ${result.attempts.length} configured provider(s) for "${CATEGORY_LABELS[result.category]}" — ` +
+              `all failed (${summary}). No further automatic retry — fix a key or try again by re-running the command.`,
           );
           return;
+        }
         case "success":
           output.appendLine(
             `[run-task] ${CATEGORY_LABELS[result.category]} -> ${result.topModel.name} (${result.execution.modelIdUsed}), ` +
-              `ranked #1 of ${result.rankedCount} ${configured.provider} model(s)` +
+              `ranked #1 of ${result.rankedCount} model(s) from ${result.topModel.provider}` +
+              (result.attempts.length > 1 ? ` — succeeded after ${result.attempts.length - 1} provider fallback(s)` : "") +
               (result.ruleApplied ? " — .modelglass/routing-rules.json override applied for this category" : ""),
           );
           output.appendLine(result.execution.text);
