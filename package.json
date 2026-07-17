@@ -36,6 +36,14 @@
       {
         "command": "modelglass.setApiKey",
         "title": "Modelglass: Set API Key"
+      },
+      {
+        "command": "modelglass.setProviderKey",
+        "title": "Modelglass: Set Provider API Key"
+      },
+      {
+        "command": "modelglass.runTask",
+        "title": "Modelglass: Run Task on Cheapest Capable Model"
       }
     ]
   },

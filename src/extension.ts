@@ -4,6 +4,8 @@ import { fetchLLMModels } from "./lib.js";
 import { promptForSubtask } from "./task.js";
 import { showRecommendation } from "./recommend.js";
 import { switchCheck } from "./switch-check.js";
+import { promptAndSetProviderKey, promptAndClearProviderKey } from "./provider-keys.js";
+import { runTask } from "./run-task.js";
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
@@ -45,6 +47,20 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand("modelglass.compareModels", () => switchCheck(context)),
+
+    vscode.commands.registerCommand("modelglass.setProviderKey", async () => {
+      const choice = await vscode.window.showQuickPick(
+        [
+          { label: "Set a provider key", action: "enter" as const },
+          { label: "Clear the stored provider key", action: "clear" as const },
+        ],
+        { title: "Modelglass Provider API Key" },
+      );
+      if (choice?.action === "enter") await promptAndSetProviderKey(context);
+      else if (choice?.action === "clear") await promptAndClearProviderKey(context);
+    }),
+
+    vscode.commands.registerCommand("modelglass.runTask", () => runTask(context)),
   );
 }
 
