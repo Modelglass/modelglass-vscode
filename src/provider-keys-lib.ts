@@ -11,12 +11,20 @@
  * itself specifies.
  *
  * Starter is explicitly single-key (SCO-232's own scope: "one key, automated
- * routing, nothing configurable") — enforced here, not left as an accidental
- * property: setting a new provider's key clears any previously-configured
- * different provider's key, so `getConfiguredProvider()` never has to guess
- * which of several stored keys is "the" one. This is NOT the multi-key
- * storage SCO-233 (Pro) will need — no hook or extension point for that is
- * added here, per the card's explicit instruction not to invite it.
+ * routing, nothing configurable") — enforced by `setProviderKeyValue`, which
+ * clears any previously-configured different provider's key, so
+ * `getConfiguredProvider()` never has to guess which of several stored keys
+ * is "the" one. That function and its exclusivity invariant are UNCHANGED
+ * below (SCO-232's own tests still pass against it unmodified).
+ *
+ * SCO-233 (Pro) ADDITIVELY extends this with `getConfiguredProviders`
+ * (plural — every configured key, not just the first) and `addProviderKey`
+ * (stores one provider's key WITHOUT touching any other slot). The
+ * underlying storage was already per-provider-slot
+ * (`modelglass.providerKey.<provider-id>`) — Starter's single-key behavior
+ * was always an application-level policy in `setProviderKeyValue`, not a
+ * storage-layer limitation, so "supporting multiple keys" needed no schema
+ * change, just a second write path that skips the clear-all-others step.
  */
 
 /**
@@ -69,19 +77,32 @@ export interface SecretStore {
   delete(key: string): Thenable<void>;
 }
 
+/**
+ * Every provider with a key currently configured (SCO-233, Pro). Under
+ * Starter's exclusivity invariant this has at most one entry; under Pro's
+ * additive `addProviderKey` it can have several — this function doesn't
+ * care which policy produced the current storage state, it just reports it.
+ */
+export async function getConfiguredProviders(
+  secrets: SecretStore,
+): Promise<{ provider: SupportedProvider; apiKey: string }[]> {
+  const configured: { provider: SupportedProvider; apiKey: string }[] = [];
+  for (const provider of SUPPORTED_PROVIDERS) {
+    const apiKey = await secrets.get(secretKeyFor(provider));
+    if (apiKey) configured.push({ provider, apiKey });
+  }
+  return configured;
+}
+
 /** The one provider currently configured, and its key — or undefined if none
- *  is set. Scans all supported providers' secret slots; the single-key
- *  invariant (enforced by setProviderKeyValue below) means at most one will
- *  ever be found, but this doesn't assume that itself — it returns the
- *  first match and stops, rather than trusting the invariant blindly. */
+ *  is set. Under Pro's multi-key storage this returns the FIRST configured
+ *  provider (SUPPORTED_PROVIDERS iteration order), same "first match, don't
+ *  assume exclusivity" contract this function has always had — unchanged
+ *  behavior, now expressed as a thin wrapper over getConfiguredProviders. */
 export async function getConfiguredProvider(
   secrets: SecretStore,
 ): Promise<{ provider: SupportedProvider; apiKey: string } | undefined> {
-  for (const provider of SUPPORTED_PROVIDERS) {
-    const apiKey = await secrets.get(secretKeyFor(provider));
-    if (apiKey) return { provider, apiKey };
-  }
-  return undefined;
+  return (await getConfiguredProviders(secrets))[0];
 }
 
 export async function getProviderKey(
@@ -117,4 +138,16 @@ export async function setProviderKeyValue(
 
 export async function clearProviderKey(secrets: SecretStore, provider: SupportedProvider): Promise<void> {
   await secrets.delete(secretKeyFor(provider));
+}
+
+/**
+ * SCO-233 (Pro) — stores a key for `provider` WITHOUT clearing any other
+ * provider's stored key, unlike setProviderKeyValue above. This is the
+ * multi-key write path: calling it repeatedly for different providers
+ * builds up a set of simultaneously-configured keys. Calling it again for
+ * the SAME provider just rotates that provider's own key (no different
+ * from setProviderKeyValue's own per-slot overwrite semantics).
+ */
+export async function addProviderKey(secrets: SecretStore, provider: SupportedProvider, apiKey: string): Promise<void> {
+  await secrets.store(secretKeyFor(provider), apiKey.trim());
 }

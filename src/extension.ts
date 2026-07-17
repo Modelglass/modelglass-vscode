@@ -4,7 +4,7 @@ import { fetchLLMModels } from "./lib.js";
 import { promptForSubtask } from "./task.js";
 import { showRecommendation } from "./recommend.js";
 import { switchCheck } from "./switch-check.js";
-import { promptAndSetProviderKey, promptAndClearProviderKey } from "./provider-keys.js";
+import { promptAndSetProviderKey, promptAndAddProviderKey, promptAndClearProviderKey } from "./provider-keys.js";
 import { runTask } from "./run-task.js";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -61,6 +61,8 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand("modelglass.runTask", () => runTask(context)),
+
+    vscode.commands.registerCommand("modelglass.addProviderKey", () => promptAndAddProviderKey(context)),
   );
 }
 

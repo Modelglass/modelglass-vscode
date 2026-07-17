@@ -13,8 +13,10 @@ import assert from "node:assert/strict";
 
 import {
   SUPPORTED_PROVIDERS,
+  addProviderKey,
   clearProviderKey,
   getConfiguredProvider,
+  getConfiguredProviders,
   getProviderKey,
   setProviderKeyValue,
   type SecretStore,
@@ -90,5 +92,81 @@ describe("provider-keys", () => {
     await clearProviderKey(secrets, "xai");
     assert.equal(await getProviderKey(secrets, "xai"), undefined);
     assert.equal(await getConfiguredProvider(secrets), undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCO-233 (Pro) — multi-key storage. addProviderKey/getConfiguredProviders are
+// purely additive; every test above (Starter's setProviderKeyValue exclusivity
+// invariant) is unmodified and still passing, unaffected by anything below.
+// ---------------------------------------------------------------------------
+
+describe("provider-keys — SCO-233 multi-key (Pro)", () => {
+  test("getConfiguredProviders returns an empty array when nothing is configured", async () => {
+    const secrets = makeSecretStore();
+    assert.deepEqual(await getConfiguredProviders(secrets), []);
+  });
+
+  test("addProviderKey stores a key without touching any other provider's slot", async () => {
+    const secrets = makeSecretStore();
+    await addProviderKey(secrets, "openai", "openai-key");
+    await addProviderKey(secrets, "anthropic", "anthropic-key");
+    await addProviderKey(secrets, "groq", "groq-key");
+
+    assert.equal(await getProviderKey(secrets, "openai"), "openai-key");
+    assert.equal(await getProviderKey(secrets, "anthropic"), "anthropic-key");
+    assert.equal(await getProviderKey(secrets, "groq"), "groq-key");
+  });
+
+  test("getConfiguredProviders reports every configured key, multiple at once", async () => {
+    const secrets = makeSecretStore();
+    await addProviderKey(secrets, "openai", "openai-key");
+    await addProviderKey(secrets, "anthropic", "anthropic-key");
+
+    const configured = await getConfiguredProviders(secrets);
+    assert.equal(configured.length, 2);
+    assert.deepEqual(
+      new Set(configured.map((c) => c.provider)),
+      new Set(["openai", "anthropic"]),
+    );
+  });
+
+  test("addProviderKey trims whitespace, same as setProviderKeyValue", async () => {
+    const secrets = makeSecretStore();
+    await addProviderKey(secrets, "mistral", "  sk-mistral  ");
+    assert.equal(await getProviderKey(secrets, "mistral"), "sk-mistral");
+  });
+
+  test("addProviderKey re-called for the same provider rotates that provider's own key only", async () => {
+    const secrets = makeSecretStore();
+    await addProviderKey(secrets, "openai", "first-key");
+    await addProviderKey(secrets, "anthropic", "anthropic-key");
+    await addProviderKey(secrets, "openai", "rotated-key");
+
+    assert.equal(await getProviderKey(secrets, "openai"), "rotated-key");
+    assert.equal(await getProviderKey(secrets, "anthropic"), "anthropic-key"); // untouched
+  });
+
+  test("getConfiguredProvider (singular) still returns just the first when multiple are configured", async () => {
+    const secrets = makeSecretStore();
+    // SUPPORTED_PROVIDERS iteration order: openai comes before groq.
+    await addProviderKey(secrets, "groq", "groq-key");
+    await addProviderKey(secrets, "openai", "openai-key");
+
+    const first = await getConfiguredProvider(secrets);
+    assert.equal(first?.provider, "openai");
+  });
+
+  test("mixing addProviderKey then setProviderKeyValue: the exclusive write still clears every other slot", async () => {
+    const secrets = makeSecretStore();
+    await addProviderKey(secrets, "openai", "openai-key");
+    await addProviderKey(secrets, "anthropic", "anthropic-key");
+    await addProviderKey(secrets, "groq", "groq-key");
+
+    // Starter's exclusive path, even after Pro-style multi-add, still
+    // enforces single-key down to whatever provider it targets.
+    await setProviderKeyValue(secrets, "mistral", "mistral-key");
+
+    assert.deepEqual(await getConfiguredProviders(secrets), [{ provider: "mistral", apiKey: "mistral-key" }]);
   });
 });

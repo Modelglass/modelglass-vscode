@@ -17,7 +17,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { routeAndExecute } from "./run-task-lib.js";
+import { routeAndExecute, routeAndExecuteWithFallback, type ConfiguredProviderKey } from "./run-task-lib.js";
 import { ProviderExecutionError, type ExecuteResult } from "./provider-execute.js";
 import type { RoutingRule } from "./routing-rules-lib.js";
 import type { RoutableModel } from "./routing-engine.js";
@@ -181,5 +181,159 @@ describe("routeAndExecute", () => {
     assert.equal(outcome.outcome, "execution-failed");
     assert.equal(outcome.outcome === "execution-failed" && outcome.error.kind, "provider-error");
     assert.match(outcome.outcome === "execution-failed" ? outcome.error.message : "", /unexpected boom/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCO-233 (Pro) — multi-key fallback chain. routeAndExecuteWithFallback calls
+// routeAndExecute internally (unchanged, see the suite above); these tests
+// exercise the chain-building/fallback/cap logic on top of it.
+// ---------------------------------------------------------------------------
+
+describe("routeAndExecuteWithFallback", () => {
+  function rateLimited(provider: string) {
+    return new ProviderExecutionError("rate-limited", provider, `${provider} is rate-limiting this key (HTTP 429).`);
+  }
+
+  test("a first-provider failure correctly falls back to the second", async () => {
+    const openaiModel = makeModel({ name: "OpenAIModel", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.9)] });
+    const anthropicModel = makeModel({
+      name: "AnthropicModel",
+      provider: "anthropic",
+      benchmarks: [bench("swe-bench-pro", 0.5)],
+    });
+
+    const calls: string[] = [];
+    const stubExecute = async (provider: string, _k: string, modelId: string): Promise<ExecuteResult> => {
+      calls.push(provider);
+      if (provider === "openai") throw rateLimited("openai");
+      return { text: "done", modelIdUsed: modelId };
+    };
+
+    const configured: ConfiguredProviderKey[] = [
+      { provider: "openai", apiKey: "sk-openai" },
+      { provider: "anthropic", apiKey: "sk-anthropic" },
+    ];
+
+    const result = await routeAndExecuteWithFallback(
+      [openaiModel, anthropicModel],
+      configured,
+      "bug-fix",
+      "task",
+      stubExecute,
+    );
+
+    assert.equal(result.outcome, "success");
+    assert.equal(result.outcome === "success" && result.topModel.name, "AnthropicModel");
+    assert.equal(result.outcome === "success" && result.attempts.length, 2);
+    assert.deepEqual(calls, ["openai", "anthropic"]); // openai (ranked #1, benchmark-stronger) tried first, then anthropic
+  });
+
+  test("never retries the same provider that just failed — advances to a different provider, not a second model on the same one", async () => {
+    // Two openai models (one ranked above the other) plus one anthropic model.
+    const openaiTop = makeModel({ name: "OpenAITop", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.9)] });
+    const openaiSecond = makeModel({ name: "OpenAISecond", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.8)] });
+    const anthropicModel = makeModel({ name: "AnthropicModel", provider: "anthropic", benchmarks: [bench("swe-bench-pro", 0.5)] });
+
+    const calls: string[] = [];
+    const stubExecute = async (provider: string, _k: string, modelId: string): Promise<ExecuteResult> => {
+      calls.push(modelId);
+      if (provider === "openai") throw rateLimited("openai"); // key-level failure -- would fail identically for ANY openai model
+      return { text: "done", modelIdUsed: modelId };
+    };
+
+    const configured: ConfiguredProviderKey[] = [
+      { provider: "openai", apiKey: "sk-openai" },
+      { provider: "anthropic", apiKey: "sk-anthropic" },
+    ];
+
+    const result = await routeAndExecuteWithFallback(
+      [openaiTop, openaiSecond, anthropicModel],
+      configured,
+      "bug-fix",
+      "task",
+      stubExecute,
+    );
+
+    assert.equal(result.outcome, "success");
+    // Exactly one openai attempt (its top-ranked model), never openaiSecond.
+    assert.deepEqual(calls, [openaiTop.modelId, anthropicModel.modelId]);
+  });
+
+  test("the attempt cap is respected — no more than one attempt per configured provider, ever", async () => {
+    const models = [
+      makeModel({ name: "A", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.9)] }),
+      makeModel({ name: "B", provider: "anthropic", benchmarks: [bench("swe-bench-pro", 0.8)] }),
+      makeModel({ name: "C", provider: "groq", benchmarks: [bench("swe-bench-pro", 0.7)] }),
+    ];
+    const configured: ConfiguredProviderKey[] = [
+      { provider: "openai", apiKey: "key-a" },
+      { provider: "anthropic", apiKey: "key-b" },
+      { provider: "groq", apiKey: "key-c" },
+    ];
+
+    let callCount = 0;
+    const stubExecute = async (provider: string): Promise<ExecuteResult> => {
+      callCount += 1;
+      throw rateLimited(provider);
+    };
+
+    const result = await routeAndExecuteWithFallback(models, configured, "bug-fix", "task", stubExecute);
+
+    assert.equal(result.outcome, "all-providers-failed");
+    assert.equal(callCount, 3); // exactly one attempt per configured provider, no more
+    assert.equal(result.outcome === "all-providers-failed" && result.attempts.length, 3);
+  });
+
+  test("final-failure case: every configured provider fails", async () => {
+    const models = [
+      makeModel({ name: "A", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.9)] }),
+      makeModel({ name: "B", provider: "anthropic", benchmarks: [bench("swe-bench-pro", 0.5)] }),
+    ];
+    const configured: ConfiguredProviderKey[] = [
+      { provider: "openai", apiKey: "key-a" },
+      { provider: "anthropic", apiKey: "key-b" },
+    ];
+
+    const stubExecute = async (provider: string): Promise<ExecuteResult> => {
+      throw new ProviderExecutionError("invalid-key", provider, `${provider} rejected the key.`);
+    };
+
+    const result = await routeAndExecuteWithFallback(models, configured, "bug-fix", "task", stubExecute);
+
+    assert.equal(result.outcome, "all-providers-failed");
+    assert.equal(result.outcome === "all-providers-failed" && result.attempts.length, 2);
+    assert.ok(
+      result.outcome === "all-providers-failed" &&
+        result.attempts.every((a) => a.result.outcome === "execution-failed"),
+    );
+  });
+
+  test("no configured providers at all", async () => {
+    const model = makeModel({ name: "Solo", provider: "openai" });
+    const result = await routeAndExecuteWithFallback([model], [], "bug-fix", "task", async () => {
+      throw new Error("should never be called");
+    });
+    assert.equal(result.outcome, "no-configured-providers");
+  });
+
+  test("a single configured provider behaves exactly like SCO-232's original one-shot flow", async () => {
+    const model = makeModel({ name: "Solo", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.7)] });
+    let callCount = 0;
+    const stubExecute = async (): Promise<ExecuteResult> => {
+      callCount += 1;
+      throw new ProviderExecutionError("invalid-key", "openai", "bad key");
+    };
+
+    const result = await routeAndExecuteWithFallback(
+      [model],
+      [{ provider: "openai", apiKey: "sk-bad" }],
+      "bug-fix",
+      "task",
+      stubExecute,
+    );
+
+    assert.equal(result.outcome, "all-providers-failed");
+    assert.equal(callCount, 1); // exactly one attempt -- no fallback possible with only one provider configured
   });
 });
