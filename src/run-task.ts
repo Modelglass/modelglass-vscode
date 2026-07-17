@@ -10,6 +10,7 @@ import {
   fetchRoutableModels,
   routeAndExecute,
 } from "./run-task-lib.js";
+import { loadRoutingRules } from "./routing-rules.js";
 
 /**
  * SCO-232 — vscode-coupled command: "Modelglass: Run Task on Cheapest
@@ -17,6 +18,13 @@ import {
  * friends) lives in ./run-task-lib.ts; this file is the thin glue — QuickPick
  * prompting, progress notification, output-channel reporting — and is not
  * tested directly, same convention as switch-check.ts/recommend.ts.
+ *
+ * SCO-231 (Pro scope) adds an optional .modelglass/routing-rules.json
+ * override, loaded here and passed through to routeAndExecute. No tier
+ * gating is applied — this runs for any plan today. Gating Pro-only
+ * features behind an actual plan check is SCO-234's separate scope;
+ * guessing at how to check Pro status here would risk conflicting with
+ * however that card ends up wiring it, so it's deliberately left undone.
  */
 
 async function promptForCategory(): Promise<LeafTaskCategory | undefined> {
@@ -66,7 +74,18 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
         return;
       }
 
-      const result = await routeAndExecute(allModels, configured.provider, configured.apiKey, category, prompt.trim());
+      const rules = await loadRoutingRules();
+      const rule = rules.found ? rules.rulesByCategory.get(category) : undefined;
+
+      const result = await routeAndExecute(
+        allModels,
+        configured.provider,
+        configured.apiKey,
+        category,
+        prompt.trim(),
+        undefined,
+        rule,
+      );
 
       switch (result.outcome) {
         case "no-provider-models":
@@ -93,7 +112,8 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
         case "success":
           output.appendLine(
             `[run-task] ${CATEGORY_LABELS[result.category]} -> ${result.topModel.name} (${result.execution.modelIdUsed}), ` +
-              `ranked #1 of ${result.rankedCount} ${configured.provider} model(s)`,
+              `ranked #1 of ${result.rankedCount} ${configured.provider} model(s)` +
+              (result.ruleApplied ? " — .modelglass/routing-rules.json override applied for this category" : ""),
           );
           output.appendLine(result.execution.text);
           output.show(true);

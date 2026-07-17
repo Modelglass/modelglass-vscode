@@ -19,6 +19,7 @@ import assert from "node:assert/strict";
 
 import { routeAndExecute } from "./run-task-lib.js";
 import { ProviderExecutionError, type ExecuteResult } from "./provider-execute.js";
+import type { RoutingRule } from "./routing-rules-lib.js";
 import type { RoutableModel } from "./routing-engine.js";
 
 function makeModel(overrides: Partial<RoutableModel> & { name: string; provider: string }): RoutableModel {
@@ -119,6 +120,55 @@ describe("routeAndExecute", () => {
     assert.equal(outcome.outcome === "execution-failed" && outcome.topModel.name, "Top Model");
     // The whole point of the no-retry contract: exactly one execution attempt.
     assert.equal(callCount, 1);
+  });
+
+  test("SCO-231: a routing rule changes which model actually gets executed", async () => {
+    const benchmarkWinner = makeModel({
+      name: "BenchmarkWinner",
+      provider: "openai",
+      benchmarks: [bench("swe-bench-pro", 0.9)],
+      inputPricePerM: 20,
+    });
+    const ruleWinner = makeModel({
+      name: "RuleWinner",
+      provider: "openai",
+      benchmarks: [bench("swe-bench-pro", 0.5)],
+      inputPricePerM: 1,
+    });
+
+    const calls: string[] = [];
+    const stubExecute = async (_p: string, _k: string, modelId: string): Promise<ExecuteResult> => {
+      calls.push(modelId);
+      return { text: "done", modelIdUsed: modelId };
+    };
+
+    // Without a rule, the benchmark-stronger (but pricier) model wins.
+    const withoutRule = await routeAndExecute(
+      [benchmarkWinner, ruleWinner],
+      "openai",
+      "sk-test",
+      "bug-fix",
+      "task",
+      stubExecute,
+    );
+    assert.equal(withoutRule.outcome === "success" && withoutRule.topModel.name, "BenchmarkWinner");
+    assert.equal(withoutRule.outcome === "success" && withoutRule.ruleApplied, false);
+
+    // With a "cheapest" override rule for bug-fix, the cheaper model wins instead.
+    const rule: RoutingRule = { category: "bug-fix", strategy: "cheapest" };
+    const withRule = await routeAndExecute(
+      [benchmarkWinner, ruleWinner],
+      "openai",
+      "sk-test",
+      "bug-fix",
+      "task",
+      stubExecute,
+      rule,
+    );
+    assert.equal(withRule.outcome === "success" && withRule.topModel.name, "RuleWinner");
+    assert.equal(withRule.outcome === "success" && withRule.ruleApplied, true);
+
+    assert.deepEqual(calls, [benchmarkWinner.modelId, ruleWinner.modelId]);
   });
 
   test("a non-ProviderExecutionError thrown by executeFn is wrapped, not left uncaught", async () => {
