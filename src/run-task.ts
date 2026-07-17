@@ -11,6 +11,7 @@ import {
   routeAndExecuteWithFallback,
 } from "./run-task-lib.js";
 import { loadRoutingRules } from "./routing-rules.js";
+import { checkProAccess, proGatedValue, selectProvidersForRun } from "./pro-gate-lib.js";
 
 /**
  * SCO-232 — vscode-coupled command: "Modelglass: Run Task on Cheapest
@@ -19,20 +20,19 @@ import { loadRoutingRules } from "./routing-rules.js";
  * QuickPick prompting, progress notification, output-channel reporting —
  * and is not tested directly, same convention as switch-check.ts/recommend.ts.
  *
- * SCO-231 (Pro scope) adds an optional .modelglass/routing-rules.json
- * override, loaded here and passed through. No tier gating is applied — this
- * runs for any plan today. Gating Pro-only features behind an actual plan
- * check is SCO-234's separate scope; guessing at how to check Pro status
- * here would risk conflicting with however that card ends up wiring it, so
- * it's deliberately left undone.
- *
- * SCO-233 (Pro scope) always routes through routeAndExecuteWithFallback now,
- * regardless of how many provider keys are configured — with exactly one
- * key configured (Starter's usual case) the fallback chain has exactly one
- * entry, so behavior is unchanged from before: one attempt, immediately
- * surfaced failure, no retry. run-task-lib.ts's own routeAndExecute (the
- * single-provider function SCO-232/231's tests exercise) is untouched and
- * still the thing routeAndExecuteWithFallback calls under the hood.
+ * SCO-231's .modelglass/routing-rules.json override and SCO-233's multi-
+ * key/fallback are both now gated behind a Pro key (SCO-234): the rules
+ * file is still loaded and validated as before (so a Starter user still
+ * gets useful feedback if it's malformed), but the parsed rule is only
+ * actually applied when the gate is satisfied — proGatedValue falls
+ * through to `undefined`, which resolveCategoryRanking already defines as
+ * identical to SCO-230's default ranking. Similarly, every configured
+ * provider is only used when the gate is satisfied; otherwise only the
+ * first is passed to routeAndExecuteWithFallback, which behaves exactly
+ * like SCO-232's original one-shot flow when given a single-entry array —
+ * Starter's enforced ceiling, not just its unconfigured default. Neither
+ * SCO-231's nor SCO-233's own logic is touched here — this file only
+ * decides WHAT to pass into them.
  */
 
 async function promptForCategory(): Promise<LeafTaskCategory | undefined> {
@@ -82,12 +82,23 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
         return;
       }
 
+      const proStatus = await checkProAccess(modelglassApiKey, fetch);
+
       const rules = await loadRoutingRules();
-      const rule = rules.found ? rules.rulesByCategory.get(category) : undefined;
+      const loadedRule = rules.found ? rules.rulesByCategory.get(category) : undefined;
+      const rule = proGatedValue(proStatus, loadedRule);
+      if (loadedRule && !rule) {
+        output.appendLine(
+          `[run-task] .modelglass/routing-rules.json has a rule for "${CATEGORY_LABELS[category]}", but routing overrides ` +
+            "are a Pro feature — ignoring it for this run (default routing applies).",
+        );
+      }
+
+      const providersForThisRun = selectProvidersForRun(configuredProviders, proStatus);
 
       const result = await routeAndExecuteWithFallback(
         allModels,
-        configuredProviders,
+        providersForThisRun,
         category,
         prompt.trim(),
         undefined,

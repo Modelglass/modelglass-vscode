@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { output } from "./auth.js";
+import { ensureApiKey, output } from "./auth.js";
 import {
   PROVIDER_LABELS,
   SUPPORTED_PROVIDERS,
@@ -10,19 +10,23 @@ import {
   setProviderKeyValue,
   type SupportedProvider,
 } from "./provider-keys-lib.js";
+import { checkProAccess, wouldExceedSingleKeyLimit, isGateSatisfied } from "./pro-gate-lib.js";
+import { promptUpgradeToPro } from "./pro-gate.js";
 
 /**
- * SCO-232/233 — vscode-coupled provider-key prompting UI. The pure storage
- * logic lives in ./provider-keys-lib.ts (no vscode import there, so it's
- * directly unit-testable); this file is the thin glue, not tested directly —
- * same split as switch-check-lib.ts/switch-check.ts and lib.ts/task.ts.
+ * SCO-232/233/234 — vscode-coupled provider-key prompting UI. The pure
+ * storage logic lives in ./provider-keys-lib.ts (no vscode import there, so
+ * it's directly unit-testable); this file is the thin glue, not tested
+ * directly — same split as switch-check-lib.ts/switch-check.ts and
+ * lib.ts/task.ts.
  *
  * promptAndSetProviderKey (SCO-232, Starter) is UNCHANGED below — exclusive
  * single-key replace, with a warning before clearing a different provider's
- * key. promptAndAddProviderKey (SCO-233, Pro) is new and additive — stores a
- * key alongside any already configured, for the multi-key/fallback-chain
- * flow. No tier gating distinguishes which command a user can run (SCO-234's
- * separate scope) — both are on the command palette for anyone today.
+ * key, still available to any plan (it never grows past one key). Growing
+ * past one simultaneously-configured provider is the actual Pro capability
+ * (SCO-233) — promptAndAddProviderKey gates ONLY that specific case
+ * (SCO-234): adding your first key at all, or rotating an already-configured
+ * provider's own key, is never gated.
  */
 
 /**
@@ -95,6 +99,26 @@ export async function promptAndAddProviderKey(context: vscode.ExtensionContext):
     { title: "Modelglass: Add Provider API Key — Choose a provider" },
   );
   if (!picked) return;
+
+  // SCO-234: only genuinely GROWING past one simultaneously-configured
+  // provider requires Pro — a first key, or rotating an already-configured
+  // provider's own key, is Starter's own baseline and is never gated here.
+  if (wouldExceedSingleKeyLimit(configured.map((c) => c.provider), picked.provider)) {
+    const modelglassApiKey = await ensureApiKey(context);
+    const status = modelglassApiKey
+      ? await checkProAccess(modelglassApiKey, fetch)
+      : ({ isPro: false, reason: "no-modelglass-key" } as const);
+
+    if (!isGateSatisfied(status)) {
+      await promptUpgradeToPro("Configuring more than one provider key (multi-key fallback)");
+      return;
+    }
+    if (!status.isPro) {
+      output.appendLine(
+        `[provider-keys] couldn't verify Pro status (${status.reason}) — allowing this multi-key add for now`,
+      );
+    }
+  }
 
   const apiKey = await vscode.window.showInputBox({
     title: `Modelglass: ${PROVIDER_LABELS[picked.provider]} API Key`,
