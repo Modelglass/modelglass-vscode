@@ -1,8 +1,8 @@
 {
   "name": "cost-aware-router",
   "displayName": "Modelglass Cost-Aware Router",
-  "description": "Route dev tasks to the cheapest LLM that clears a confirmed benchmark bar, using the live Modelglass pricing feed.",
-  "version": "0.2.0",
+  "description": "Route dev tasks to the cheapest capable LLM using the live Modelglass pricing feed — and execute them directly against your own provider key (BYOK), no proxy.",
+  "version": "0.3.0",
   "publisher": "modelglass",
   "license": "MIT",
   "type": "module",
