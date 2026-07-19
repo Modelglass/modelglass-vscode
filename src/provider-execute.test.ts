@@ -10,7 +10,12 @@
 import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ProviderExecutionError, executeProviderCall, resolveProviderModelId } from "./provider-execute.js";
+import {
+  DEFAULT_PROVIDER_TIMEOUT_MS,
+  ProviderExecutionError,
+  executeProviderCall,
+  resolveProviderModelId,
+} from "./provider-execute.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -133,5 +138,64 @@ describe("executeProviderCall — Anthropic adapter", () => {
         return true;
       },
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCO-262 — a hung request has no response to classify without a bounded
+// timeout. This fetch stub mirrors real fetch's own AbortSignal behavior
+// (reject with an AbortError once the passed signal aborts) rather than just
+// asserting a timeoutMs is threaded through — it exercises the actual
+// setTimeout/AbortController wiring in provider-execute.ts, not a stand-in
+// for it.
+// ---------------------------------------------------------------------------
+describe("executeProviderCall — timeout (SCO-262)", () => {
+  function hangingFetch(): typeof fetch {
+    return ((_url: string, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      });
+    }) as typeof fetch;
+  }
+
+  test("OpenAI-compatible adapter: a hung request times out and classifies as network-error", async () => {
+    globalThis.fetch = hangingFetch();
+    await assert.rejects(
+      () => executeProviderCall("openai", "sk-test", "openai/gpt-5.5", "hi", 20),
+      (e: unknown) => {
+        assert.ok(e instanceof ProviderExecutionError);
+        assert.equal(e.kind, "network-error");
+        assert.match(e.message, /timed out/i);
+        return true;
+      },
+    );
+  });
+
+  test("Anthropic adapter: a hung request times out and classifies as network-error", async () => {
+    globalThis.fetch = hangingFetch();
+    await assert.rejects(
+      () => executeProviderCall("anthropic", "sk-test", "anthropic/claude-sonnet-5", "hi", 20),
+      (e: unknown) => {
+        assert.ok(e instanceof ProviderExecutionError);
+        assert.equal(e.kind, "network-error");
+        assert.match(e.message, /timed out/i);
+        return true;
+      },
+    );
+  });
+
+  test("defaults to DEFAULT_PROVIDER_TIMEOUT_MS when no timeoutMs is passed", async () => {
+    const calls: RequestInit[] = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push(init);
+      return jsonResponse(200, { choices: [{ message: { content: "ok" } }] });
+    }) as typeof fetch;
+    await executeProviderCall("openai", "sk-test", "openai/gpt-5.5", "hi");
+    // The signal exists (a timer was armed); the default constant itself is
+    // asserted directly rather than by racing a real 60s clock.
+    assert.ok(calls[0]!.signal instanceof AbortSignal);
+    assert.equal(DEFAULT_PROVIDER_TIMEOUT_MS, 60_000);
   });
 });
