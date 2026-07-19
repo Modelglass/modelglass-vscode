@@ -257,7 +257,74 @@ export function describeFailure(error: ProviderExecutionError): string {
   }
 }
 
-/** Re-exported for run-task.ts's convenience — fetch + normalise in one step. */
-export async function fetchRoutableModels(modelglassApiKey: string): Promise<RoutableModel[]> {
-  return (await fetchLLMModels(modelglassApiKey)).map(normalise);
+// ---------------------------------------------------------------------------
+// SCO-264 — quick-win local cache for the model/benchmark feed. Every Run
+// Task invocation used to make its own uncached GET /v1/models?modality=llm
+// call before ever touching a provider — the router's own pitch ("no proxy
+// in the request path, no outage surface you don't control") didn't hold up
+// against that: a Modelglass API blip killed the run at the routing hop
+// instead of the execution hop, which is exactly the kind of outage surface
+// the pitch claims doesn't exist. Two effects from one cache: (1) within the
+// TTL, back-to-back Run Task calls share one fetch instead of hitting the
+// API every time; (2) on a fetch failure past the TTL, the last known-good
+// feed is served instead of failing the whole run — a transient blip no
+// longer blocks anything as long as ONE fetch has ever succeeded this
+// session. A module-level singleton is deliberate, not an oversight: it's
+// meant to persist across every Run Task invocation for the life of the
+// Extension Host, the same lifetime `output` (auth.ts) already assumes.
+// 5 minutes: pricing/benchmark data changes on a registry-PR cadence (hours
+// to days), not seconds, so this is generous slack for the failure-tolerance
+// benefit without meaningfully risking staleness within one editing session.
+// ---------------------------------------------------------------------------
+
+export const FEED_CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface FeedCacheEntry {
+  models: RoutableModel[];
+  fetchedAt: number;
+}
+
+let feedCache: FeedCacheEntry | undefined;
+
+/** Test-only: no real command path calls this — it exists so each test can
+ *  start from a cold cache regardless of run order. */
+export function __resetFeedCacheForTests(): void {
+  feedCache = undefined;
+}
+
+/**
+ * Fetch + normalise in one step (re-exported for run-task.ts's convenience),
+ * now cache-backed per the header above. `fetchFn`/`nowFn` are injectable
+ * for tests, same convention as `executeFn` elsewhere in this file.
+ * `onStaleFallback` is an optional hook (run-task.ts wires it to the shared
+ * Output channel) so a stale-cache fallback is visible somewhere, matching
+ * ADR-0012's "evidence, not a verdict" logging convention used for provider
+ * fallback — silently serving stale data with zero signal would hide a real
+ * outage rather than tolerate it gracefully.
+ */
+export async function fetchRoutableModels(
+  modelglassApiKey: string,
+  fetchFn: (apiKey: string) => ReturnType<typeof fetchLLMModels> = fetchLLMModels,
+  nowFn: () => number = Date.now,
+  onStaleFallback?: (message: string) => void,
+): Promise<RoutableModel[]> {
+  const now = nowFn();
+  if (feedCache && now - feedCache.fetchedAt < FEED_CACHE_TTL_MS) {
+    return feedCache.models;
+  }
+
+  try {
+    const models = (await fetchFn(modelglassApiKey)).map(normalise);
+    feedCache = { models, fetchedAt: now };
+    return models;
+  } catch (e) {
+    if (feedCache) {
+      onStaleFallback?.(
+        `couldn't refresh the model/benchmark feed (${e instanceof Error ? e.message : String(e)}) — ` +
+          `serving the last cached copy from ${new Date(feedCache.fetchedAt).toISOString()} instead.`,
+      );
+      return feedCache.models;
+    }
+    throw e;
+  }
 }

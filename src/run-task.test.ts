@@ -14,13 +14,20 @@
  * provider-execute.test.ts for those).
  */
 
-import { describe, test } from "node:test";
+import { beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { routeAndExecute, routeAndExecuteWithFallback, type ConfiguredProviderKey } from "./run-task-lib.js";
+import {
+  __resetFeedCacheForTests,
+  FEED_CACHE_TTL_MS,
+  fetchRoutableModels,
+  routeAndExecute,
+  routeAndExecuteWithFallback,
+  type ConfiguredProviderKey,
+} from "./run-task-lib.js";
 import { ProviderExecutionError, type ExecuteResult } from "./provider-execute.js";
 import type { RoutingRule } from "./routing-rules-lib.js";
-import type { RoutableModel } from "./routing-engine.js";
+import type { ModelEntry, RoutableModel } from "./routing-engine.js";
 
 function makeModel(overrides: Partial<RoutableModel> & { name: string; provider: string }): RoutableModel {
   return {
@@ -335,5 +342,76 @@ describe("routeAndExecuteWithFallback", () => {
 
     assert.equal(result.outcome, "all-providers-failed");
     assert.equal(callCount, 1); // exactly one attempt -- no fallback possible with only one provider configured
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCO-264 — the local feed cache. fetchFn/nowFn are injected so these tests
+// never touch real network or wall-clock time (same convention as
+// executeFn above); __resetFeedCacheForTests keeps the module-level cache
+// from leaking state between tests in this file.
+// ---------------------------------------------------------------------------
+
+describe("fetchRoutableModels — feed cache (SCO-264)", () => {
+  beforeEach(() => {
+    __resetFeedCacheForTests();
+  });
+
+  function entry(name: string): ModelEntry {
+    return { model_id: `test/${name}`, name, offerings: [] };
+  }
+
+  test("a second call within the TTL is served from cache — no refetch", async () => {
+    let calls = 0;
+    const fetchFn = async (): Promise<ModelEntry[]> => {
+      calls += 1;
+      return [entry("Model A")];
+    };
+    let now = 1_000_000;
+
+    const first = await fetchRoutableModels("key", fetchFn, () => now);
+    now += 1_000; // well inside FEED_CACHE_TTL_MS
+    const second = await fetchRoutableModels("key", fetchFn, () => now);
+
+    assert.equal(calls, 1);
+    assert.deepEqual(second, first);
+  });
+
+  test("a call after the TTL elapses refetches", async () => {
+    let calls = 0;
+    const fetchFn = async (): Promise<ModelEntry[]> => {
+      calls += 1;
+      return [entry(`Model ${calls}`)];
+    };
+    let now = 1_000_000;
+
+    await fetchRoutableModels("key", fetchFn, () => now);
+    now += FEED_CACHE_TTL_MS + 1;
+    await fetchRoutableModels("key", fetchFn, () => now);
+
+    assert.equal(calls, 2);
+  });
+
+  test("a fetch failure after a prior success falls back to the last cached feed instead of failing the run", async () => {
+    let now = 1_000_000;
+    const primed = await fetchRoutableModels("key", async () => [entry("Cached Model")], () => now);
+
+    now += FEED_CACHE_TTL_MS + 1; // force the cache stale so the next call attempts a real refetch
+    const failingFetch = async (): Promise<ModelEntry[]> => {
+      throw new Error("Modelglass API 503");
+    };
+    const messages: string[] = [];
+    const served = await fetchRoutableModels("key", failingFetch, () => now, (m) => messages.push(m));
+
+    assert.deepEqual(served, primed);
+    assert.equal(messages.length, 1);
+    assert.match(messages[0]!, /couldn't refresh/i);
+  });
+
+  test("a fetch failure with nothing cached yet still throws — no stale copy to fall back to", async () => {
+    const failingFetch = async (): Promise<ModelEntry[]> => {
+      throw new Error("Modelglass API 503");
+    };
+    await assert.rejects(() => fetchRoutableModels("key", failingFetch), /Modelglass API 503/);
   });
 });
