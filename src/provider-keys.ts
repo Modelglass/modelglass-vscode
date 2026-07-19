@@ -12,6 +12,9 @@ import {
 } from "./provider-keys-lib.js";
 import { checkProAccess, wouldExceedSingleKeyLimit, isGateSatisfied } from "./pro-gate-lib.js";
 import { promptUpgradeToPro } from "./pro-gate.js";
+import { fetchRoutableModels } from "./run-task-lib.js";
+import { previewProviderCapabilities, summarizeCapabilityPreview, formatCategoryLines } from "./capability-preview-lib.js";
+import type { RoutableModel } from "./routing-engine.js";
 
 /**
  * SCO-232/233/234 — vscode-coupled provider-key prompting UI. The pure
@@ -28,6 +31,53 @@ import { promptUpgradeToPro } from "./pro-gate.js";
  * (SCO-234): adding your first key at all, or rotating an already-configured
  * provider's own key, is never gated.
  */
+
+/**
+ * SCO-263 — best-effort setup-time capability preview, run right after a
+ * provider key is stored (Starter's "Set" and Pro's "Add" flows both call
+ * this). Reuses the SAME feed fetch Run Task itself uses
+ * (fetchRoutableModels, SCO-264-cached) so the preview can't show something
+ * Run Task wouldn't actually see, and never blocks or fails key storage —
+ * the key is already saved by the time this runs; a feed-fetch failure here
+ * just means no preview this time; logged, not surfaced as an error.
+ */
+async function showCapabilityPreview(
+  context: vscode.ExtensionContext,
+  provider: SupportedProvider,
+): Promise<void> {
+  const modelglassApiKey = await ensureApiKey(context);
+  if (!modelglassApiKey) return;
+
+  let allModels: RoutableModel[];
+  try {
+    allModels = await fetchRoutableModels(modelglassApiKey);
+  } catch (e) {
+    output.appendLine(
+      `[provider-keys] couldn't fetch the model feed to preview ${provider}'s task-category coverage ` +
+        `(${e instanceof Error ? e.message : String(e)}) — skipping the preview this time.`,
+    );
+    return;
+  }
+
+  const preview = previewProviderCapabilities(allModels, provider);
+  output.appendLine(`[provider-keys] ${provider} capability preview:`);
+  for (const line of formatCategoryLines(preview)) {
+    output.appendLine(`  - ${line}`);
+  }
+
+  if (preview.routable.length === 0) {
+    vscode.window.showWarningMessage(
+      `Modelglass: ${PROVIDER_LABELS[provider]} has no routable models for ANY task category right now ` +
+        `(${summarizeCapabilityPreview(preview)}) — Run Task will never find a match with just this key ` +
+        "until registry benchmark coverage improves. See the Modelglass output channel for the full breakdown.",
+    );
+  } else if (preview.zeroRoutable.length > 0) {
+    vscode.window.showInformationMessage(
+      `Modelglass: ${PROVIDER_LABELS[provider]} is ${summarizeCapabilityPreview(preview)}. ` +
+        "See the Modelglass output channel for the full breakdown.",
+    );
+  }
+}
 
 /**
  * "Modelglass: Set Provider API Key" (SCO-232) — pick a supported provider,
@@ -78,6 +128,8 @@ export async function promptAndSetProviderKey(context: vscode.ExtensionContext):
     `Modelglass: ${PROVIDER_LABELS[picked.provider]} key saved.` +
       (replaced ? ` Your previous ${PROVIDER_LABELS[replaced]} key was removed.` : ""),
   );
+
+  await showCapabilityPreview(context, picked.provider);
 }
 
 /**
@@ -137,6 +189,8 @@ export async function promptAndAddProviderKey(context: vscode.ExtensionContext):
   vscode.window.showInformationMessage(
     `Modelglass: ${PROVIDER_LABELS[picked.provider]} key saved. ${nowConfigured.length} provider key(s) configured.`,
   );
+
+  await showCapabilityPreview(context, picked.provider);
 }
 
 /**
