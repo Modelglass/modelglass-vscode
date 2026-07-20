@@ -12,6 +12,7 @@ import {
 } from "./run-task-lib.js";
 import { loadRoutingRules } from "./routing-rules.js";
 import { checkProAccess, proGatedValue, selectProvidersForRun } from "./pro-gate-lib.js";
+import { promptUpgradeToPro } from "./pro-gate.js";
 
 /**
  * SCO-232 — vscode-coupled command: "Modelglass: Run Task on Cheapest
@@ -94,6 +95,15 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
           `[run-task] .modelglass/routing-rules.json has a rule for "${CATEGORY_LABELS[category]}", but routing overrides ` +
             "are a Pro feature — ignoring it for this run (default routing applies).",
         );
+        // SCO-261: this used to be Output-channel-only — invisible to anyone
+        // without that channel open, for what's otherwise a monetization-
+        // relevant moment (Pro upsell). Reuses the same real upgrade
+        // notification provider-keys.ts already shows for the "second
+        // provider key" case, so the README's "gets a clear upgrade prompt"
+        // claim is now true for BOTH cases it covers, not just one.
+        // Fire-and-forget (not awaited) — the task still runs immediately
+        // with default routing regardless of whether/how the user responds.
+        void promptUpgradeToPro(`Applying your .modelglass/routing-rules.json override for "${CATEGORY_LABELS[category]}"`);
       }
 
       const providersForThisRun = selectProvidersForRun(configuredProviders, proStatus);
