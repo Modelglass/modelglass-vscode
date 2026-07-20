@@ -39,19 +39,24 @@ you supply.
    depending on category — with a qualitative capability-rating fallback for
    categories no benchmark covers well) and **calls the top-ranked model
    directly**, using your own key. Supports OpenAI, Anthropic, DeepSeek,
-   xAI, Mistral, Groq, Together AI, and OpenRouter.
+   xAI, Mistral, Groq, Together AI, and OpenRouter. That feed is cached
+   locally for ~5 minutes, so a brief Modelglass API blip doesn't block a
+   Run Task call — a fetch failure past that window falls back to the last
+   known-good feed instead of failing the run.
 4. **Starter** (one configured key): one execution attempt. A failure
-   (invalid key, rate limit, network/provider error) is reported clearly —
-   no automatic retry.
+   (invalid key, rate limit, network/provider error, or a request that
+   times out after 60s with no response) is reported clearly — no
+   automatic retry.
 5. **Pro** (multiple configured keys, via **Modelglass: Add Provider API
-   Key**): on a failure, automatically retries the next-best-ranked model on
-   a *different* configured provider (never the same provider twice), up to
-   one attempt per configured provider. Pro also unlocks an optional
-   `.modelglass/routing-rules.json` file in your workspace to override the
-   default ranking per category — exclude a provider, force cheapest-first,
-   or set an exact model priority order. A Starter user with a
-   `routing-rules.json` present, or attempting to configure more than one
-   provider key, gets a clear upgrade prompt rather than a silent failure.
+   Key**): on a failure — including a timeout — automatically retries the
+   next-best-ranked model on a *different* configured provider (never the
+   same provider twice), up to one attempt per configured provider. Pro
+   also unlocks an optional `.modelglass/routing-rules.json` file in your
+   workspace to override the default ranking per category — exclude a
+   provider, force cheapest-first, or set an exact model priority order. A
+   Starter user with a `routing-rules.json` present, or attempting to
+   configure more than one provider key, gets a clear upgrade prompt rather
+   than a silent failure.
 
 ## Install
 
@@ -96,6 +101,13 @@ never sent to Modelglass, only to the provider itself.
 
 Both store into VS Code's `SecretStorage`, same mechanism as the free
 Modelglass key.
+
+Right after a key is saved, the extension previews which of the nine task
+categories that provider actually has routable models for — registry
+benchmark coverage is sparse enough that some providers/categories resolve
+to zero models today, and this makes that gap visible immediately (Output
+channel breakdown, plus a notification if coverage is partial or zero)
+instead of discovered mid-task.
 
 ## Commands
 
