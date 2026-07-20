@@ -74,7 +74,9 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
     async () => {
       let allModels: RoutableModel[];
       try {
-        allModels = await fetchRoutableModels(modelglassApiKey);
+        allModels = await fetchRoutableModels(modelglassApiKey, undefined, undefined, (message) =>
+          output.appendLine(`[run-task] ${message}`),
+        );
       } catch (e) {
         vscode.window.showErrorMessage(
           `Modelglass: couldn't fetch model data (${e instanceof Error ? e.message : String(e)}).`,
