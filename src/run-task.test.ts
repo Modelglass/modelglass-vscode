@@ -195,6 +195,47 @@ describe("routeAndExecuteWithFallback", () => {
     return new ProviderExecutionError("rate-limited", provider, `${provider} is rate-limiting this key (HTTP 429).`);
   }
 
+  test("SCO-262: a timeout on the first provider triggers fallback to the second, same as any other classified failure", async () => {
+    const openaiModel = makeModel({ name: "OpenAIModel", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.9)] });
+    const anthropicModel = makeModel({
+      name: "AnthropicModel",
+      provider: "anthropic",
+      benchmarks: [bench("swe-bench-pro", 0.5)],
+    });
+
+    const calls: string[] = [];
+    const stubExecute = async (provider: string, _k: string, modelId: string): Promise<ExecuteResult> => {
+      calls.push(provider);
+      if (provider === "openai") {
+        // Mirrors exactly what provider-execute.ts's AbortController timeout
+        // throws once a request hangs past its bound (see
+        // provider-execute.test.ts's "timeout" suite for the real wiring) —
+        // this test's job is to prove that error kind reaches the SAME
+        // fallback trigger point as invalid-key/rate-limited/etc., not to
+        // re-exercise the AbortController itself.
+        throw new ProviderExecutionError("network-error", "openai", "timed out waiting for a response after 60000ms");
+      }
+      return { text: "done", modelIdUsed: modelId };
+    };
+
+    const configured: ConfiguredProviderKey[] = [
+      { provider: "openai", apiKey: "sk-openai" },
+      { provider: "anthropic", apiKey: "sk-anthropic" },
+    ];
+
+    const result = await routeAndExecuteWithFallback(
+      [openaiModel, anthropicModel],
+      configured,
+      "bug-fix",
+      "task",
+      stubExecute,
+    );
+
+    assert.equal(result.outcome, "success");
+    assert.equal(result.outcome === "success" && result.topModel.name, "AnthropicModel");
+    assert.deepEqual(calls, ["openai", "anthropic"]);
+  });
+
   test("a first-provider failure correctly falls back to the second", async () => {
     const openaiModel = makeModel({ name: "OpenAIModel", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.9)] });
     const anthropicModel = makeModel({

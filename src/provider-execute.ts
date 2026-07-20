@@ -36,6 +36,31 @@ export interface ExecuteResult {
 }
 
 /**
+ * SCO-262 — ADR-0012 names "no response within a bounded timeout" as one of
+ * the five classified failure kinds (folded into "network-error" — a
+ * timeout and an unreachable host are the same signal to a fallback chain:
+ * this provider isn't answering, try the next one), but nothing enforced it
+ * until now: a hung request just hung, forever, never reaching the
+ * catch/classify path that drives Pro's fallback chain at all.
+ *
+ * One global default rather than a per-category budget: every Run Task
+ * category here is a single one-shot chat completion (not an agentic/
+ * tool-calling loop — `agentic-multi-step` fans out to per-subtask leaf
+ * calls elsewhere, each independently subject to this same timeout, see
+ * run-task-lib.ts's header), so how long a call legitimately takes is
+ * driven by the model's own generation speed and output length, not by
+ * which of the nine task categories the caller picked. 60s is generous
+ * enough for a slower/reasoning model's single completion while still
+ * bounding how long Pro's fallback chain can hang on one dead provider
+ * before advancing.
+ */
+export const DEFAULT_PROVIDER_TIMEOUT_MS = 60_000;
+
+function isAbortError(e: unknown): boolean {
+  return e instanceof Error && e.name === "AbortError";
+}
+
+/**
  * Known gap, documented rather than silently assumed correct: the
  * Modelglass registry has no field for the literal provider-API model
  * identifier — `model.id` (`creator-org/model-name`) and the registry
@@ -94,7 +119,10 @@ async function executeOpenAiCompatible(
   apiKey: string,
   modelId: string,
   prompt: string,
+  timeoutMs: number,
 ): Promise<ExecuteResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
     response = await fetch(`${config.baseUrl}/chat/completions`, {
@@ -107,13 +135,23 @@ async function executeOpenAiCompatible(
         model: modelId,
         messages: [{ role: "user", content: prompt }],
       }),
+      signal: controller.signal,
     });
   } catch (e) {
+    if (isAbortError(e)) {
+      throw new ProviderExecutionError(
+        "network-error",
+        provider,
+        `timed out waiting for a response after ${timeoutMs}ms`,
+      );
+    }
     throw new ProviderExecutionError(
       "network-error",
       provider,
       e instanceof Error ? e.message : String(e),
     );
+  } finally {
+    clearTimeout(timer);
   }
 
   if (!response.ok) {
@@ -130,7 +168,14 @@ async function executeOpenAiCompatible(
   return { text, modelIdUsed: modelId };
 }
 
-async function executeAnthropic(apiKey: string, modelId: string, prompt: string): Promise<ExecuteResult> {
+async function executeAnthropic(
+  apiKey: string,
+  modelId: string,
+  prompt: string,
+  timeoutMs: number,
+): Promise<ExecuteResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
     response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -145,9 +190,19 @@ async function executeAnthropic(apiKey: string, modelId: string, prompt: string)
         max_tokens: 4096,
         messages: [{ role: "user", content: prompt }],
       }),
+      signal: controller.signal,
     });
   } catch (e) {
+    if (isAbortError(e)) {
+      throw new ProviderExecutionError(
+        "network-error",
+        "anthropic",
+        `timed out waiting for a response after ${timeoutMs}ms`,
+      );
+    }
     throw new ProviderExecutionError("network-error", "anthropic", e instanceof Error ? e.message : String(e));
+  } finally {
+    clearTimeout(timer);
   }
 
   if (!response.ok) {
@@ -172,16 +227,17 @@ export async function executeProviderCall(
   apiKey: string,
   modelId: string,
   prompt: string,
+  timeoutMs: number = DEFAULT_PROVIDER_TIMEOUT_MS,
 ): Promise<ExecuteResult> {
   const providerModelId = resolveProviderModelId(provider, modelId);
 
   if (provider === "anthropic") {
-    return executeAnthropic(apiKey, providerModelId, prompt);
+    return executeAnthropic(apiKey, providerModelId, prompt, timeoutMs);
   }
 
   const config = OPENAI_COMPATIBLE[provider];
   if (!config) {
     throw new ProviderExecutionError("unsupported-provider", provider, `No execution adapter for "${provider}".`);
   }
-  return executeOpenAiCompatible(provider, config, apiKey, providerModelId, prompt);
+  return executeOpenAiCompatible(provider, config, apiKey, providerModelId, prompt, timeoutMs);
 }
