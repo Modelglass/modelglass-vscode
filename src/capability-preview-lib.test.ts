@@ -118,4 +118,23 @@ describe("formatCategoryLines", () => {
     assert.ok(lines.some((l) => l.includes("1 model(s)")));
     assert.ok(lines.some((l) => l.includes("none routable")));
   });
+
+  test("SCO-272: a zero-routable library-aware-feature-work line notes the gap is industry-wide, not Modelglass-specific", () => {
+    const model = makeModel({ name: "M", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.5)] });
+    const preview = previewProviderCapabilities([model], "openai");
+    const lines = formatCategoryLines(preview);
+
+    const libraryLine = lines.find((l) => l.startsWith("Library-aware feature work:"))!;
+    assert.match(libraryLine, /none routable/);
+    assert.match(libraryLine, /not just here/i);
+  });
+
+  test("a different zero-routable category (no industry-wide note defined) stays plain — no note text leaks onto it", () => {
+    const model = makeModel({ name: "M", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.5)] });
+    const preview = previewProviderCapabilities([model], "openai");
+    const lines = formatCategoryLines(preview);
+
+    const testGenLine = lines.find((l) => l.startsWith("Test generation:"))!;
+    assert.equal(testGenLine, "Test generation: none routable");
+  });
 });

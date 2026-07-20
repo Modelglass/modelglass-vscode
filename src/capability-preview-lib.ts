@@ -67,11 +67,28 @@ export function previewProviderCapabilities(
   };
 }
 
+/**
+ * Categories where a zero-routable result reflects a known, industry-wide
+ * benchmark gap (SCO-272) rather than a Modelglass-specific coverage hole —
+ * worth a one-line note so it doesn't read as "we haven't built this yet".
+ * `library-aware-feature-work` maps to BigCodeBench, whose own leaderboard
+ * dataset hasn't been updated since April 2025 (confirmed directly against
+ * its Hugging Face dataset metadata) — no current-gen model anywhere has a
+ * published score for it, so this stays empty for every provider, not just
+ * ones Modelglass has thin data for.
+ */
+const INDUSTRY_WIDE_GAP_NOTE: Partial<Record<LeafTaskCategory, string>> = {
+  "library-aware-feature-work":
+    "no current-gen model anywhere has a published score for this yet, not just here",
+};
+
 /** One line per category, e.g. "Bug fix / debug: 4 model(s)" / "Autocomplete: none routable". */
 export function formatCategoryLines(preview: CapabilityPreview): string[] {
-  return preview.categories.map(
-    (c) => `${c.label}: ${c.routableCount > 0 ? `${c.routableCount} model(s)` : "none routable"}`,
-  );
+  return preview.categories.map((c) => {
+    const base = `${c.label}: ${c.routableCount > 0 ? `${c.routableCount} model(s)` : "none routable"}`;
+    const note = c.routableCount === 0 ? INDUSTRY_WIDE_GAP_NOTE[c.category] : undefined;
+    return note ? `${base} (${note})` : base;
+  });
 }
 
 /** A single-line summary suitable for a notification/info message. */
