@@ -127,12 +127,19 @@ export type FallbackOutcome =
  *
  * "Next in chain" means the next-ranked model on a DIFFERENT configured
  * provider, never a second model on a provider that already failed. ADR-0012's
- * four failure kinds (invalid-key, rate-limited, network-error,
+ * original four failure kinds (invalid-key, rate-limited, network-error,
  * provider-error) are ALL connection/key-level failures, not per-model ones —
  * an invalid key or a rate limit applies identically to every model call
  * against that same host. Retrying a second model on the SAME provider after
  * any of these would almost certainly reproduce the identical failure, which
- * is exactly the "pointless retry" the card asks to avoid. So the chain is
+ * is exactly the "pointless retry" the card asks to avoid.
+ *
+ * ADR-0012 Amendment 1 (SCO-281) carves out exactly one named exception to
+ * that rule: `model-not-found` is specific to the one model string tried,
+ * not the provider or key, so a different model on the same provider is
+ * likely to work where an invalid-key/rate-limit/network/provider-error
+ * retry would not be. See the `allowSameProviderRetry`-gated block below —
+ * every other failure class is unchanged by this. So the chain is
  * built by ranking ALL configured providers' models together for this
  * category (via resolveCategoryRanking — the same rule-composed ranking
  * SCO-231 already built, so an excludeProviders/priority rule composes here
@@ -159,6 +166,18 @@ export async function routeAndExecuteWithFallback(
   prompt: string,
   executeFn: ExecuteFn = executeProviderCall,
   rule?: RoutingRule,
+  /**
+   * ADR-0012 Amendment 1 (SCO-281) — defaults to false. The caller decides
+   * this, not this function: Starter's "no retry, one attempt, full stop"
+   * contract must stay untouched even though Starter's single-provider
+   * calls go through this exact same function (a truncated one-provider
+   * chain, per SCO-234's `selectProvidersForRun`). Same pattern SCO-234
+   * already established for tier gating elsewhere in this codebase —
+   * "gating lives entirely in the calling code, deciding WHAT to pass in,"
+   * not a tier check inside the shared orchestration logic itself.
+   * run-task.ts passes `isGateSatisfied(proStatus)` here.
+   */
+  allowSameProviderRetry: boolean = false,
 ): Promise<FallbackOutcome> {
   if (configuredProviders.length === 0) {
     return { outcome: "no-configured-providers", category };
@@ -188,9 +207,32 @@ export async function routeAndExecuteWithFallback(
     if (result.outcome === "success") {
       return { ...result, attempts };
     }
-    // execution-failed, or (defensively) no-ranked-models if this provider's
-    // own pool somehow scored nothing despite appearing in the combined
-    // ranking — either way, fall through to the next provider in the chain.
+
+    // ADR-0012 Amendment 1 (SCO-281): model-not-found is specific to the
+    // one model just tried, not this provider or key — retry ONCE against
+    // this same provider's next-best model (excluding the one that just
+    // failed) before advancing the chain. Pro-only, per the docstring
+    // above; every other failure class falls straight through unchanged.
+    if (allowSameProviderRetry && result.outcome === "execution-failed" && result.error.kind === "model-not-found") {
+      const retryResult = await routeAndExecute(
+        allModels,
+        provider,
+        apiKey,
+        category,
+        prompt,
+        executeFn,
+        rule,
+        new Set([result.topModel.modelId]),
+      );
+      attempts.push({ provider, result: retryResult });
+      if (retryResult.outcome === "success") {
+        return { ...retryResult, attempts };
+      }
+    }
+    // execution-failed (including a failed same-provider retry above), or
+    // (defensively) no-ranked-models if this provider's own pool somehow
+    // scored nothing despite appearing in the combined ranking — either
+    // way, fall through to the next provider in the chain.
   }
 
   return { outcome: "all-providers-failed", category, attempts };
@@ -217,6 +259,16 @@ export async function routeAndExecuteWithFallback(
  * invocation, full stop. The caller (the vscode command in run-task.ts)
  * surfaces it; nothing here loops. (No Pro-tier gating on rule application
  * itself — SCO-234's scope, not this card's; see run-task.ts's header.)
+ *
+ * `excludeModelIds` (ADR-0012 Amendment 1 / SCO-281) — optional, filters
+ * these model IDs out of the pool before ranking. This function itself
+ * still only ever calls one model and never loops, matching the contract
+ * above unchanged; the parameter exists so `routeAndExecuteWithFallback`
+ * can call this same function a SECOND time for a provider that already
+ * failed on `model-not-found`, to reach that provider's next-best model
+ * instead of the same one that just failed. Starter's call sites never
+ * pass this — the retry is built entirely in the Pro-only fallback chain,
+ * not here.
  */
 export async function routeAndExecute(
   allModels: RoutableModel[],
@@ -226,8 +278,11 @@ export async function routeAndExecute(
   prompt: string,
   executeFn: ExecuteFn = executeProviderCall,
   rule?: RoutingRule,
+  excludeModelIds?: ReadonlySet<string>,
 ): Promise<RouteAndExecuteOutcome> {
-  const providerModels = allModels.filter((m) => m.provider === provider);
+  const providerModels = allModels.filter(
+    (m) => m.provider === provider && !excludeModelIds?.has(m.modelId),
+  );
   if (providerModels.length === 0) {
     return { outcome: "no-provider-models", category, provider };
   }
@@ -270,6 +325,8 @@ export function describeFailure(error: ProviderExecutionError): string {
       return `couldn't reach ${error.provider} (${error.message})`;
     case "unsupported-provider":
       return `no execution adapter exists yet for ${error.provider}`;
+    case "model-not-found":
+      return `${error.provider} doesn't recognize this model string`;
     case "provider-error":
       return `${error.provider} returned an error (${error.message})`;
   }

@@ -16,7 +16,8 @@ export type FailureKind =
   | "rate-limited"
   | "network-error"
   | "provider-error"
-  | "unsupported-provider";
+  | "unsupported-provider"
+  | "model-not-found";
 
 export class ProviderExecutionError extends Error {
   readonly kind: FailureKind;
@@ -111,12 +112,35 @@ const OPENAI_COMPATIBLE: Partial<Record<SupportedProvider, OpenAiCompatibleConfi
   openrouter: { baseUrl: "https://openrouter.ai/api/v1" },
 };
 
+/**
+ * ADR-0012 Amendment 1 (SCO-281) — a bad model string (the acknowledged
+ * least-reliable case for Together AI/OpenRouter in resolveProviderModelId's
+ * own header) is specific to that ONE model, not the provider or key, so it
+ * needs to be distinguishable from a real provider-error: retrying a
+ * different model on the SAME provider is likely to work, unlike every
+ * other classified failure here. 404 is the clean, common signal every
+ * REST-shaped provider here uses for an unknown model. Some providers
+ * (Anthropic in particular) can validate a bad `model` field as a 400
+ * instead of a clean 404 -- covered by a body-text pattern match rather
+ * than assumed to only ever be a 404, per the ADR's own "or a
+ * provider-specific 'model does not exist' error body where the HTTP
+ * status alone is ambiguous" wording.
+ */
+const MODEL_NOT_FOUND_BODY_PATTERN = /model[^.]*(not[ _-]?found|does not exist|is not a valid model|invalid model)/i;
+
 function classifyHttpFailure(provider: string, status: number, bodyText: string): ProviderExecutionError {
   if (status === 401 || status === 403) {
     return new ProviderExecutionError("invalid-key", provider, `${provider} rejected the API key (HTTP ${status}).`);
   }
   if (status === 429) {
     return new ProviderExecutionError("rate-limited", provider, `${provider} is rate-limiting this key (HTTP 429).`);
+  }
+  if (status === 404 || MODEL_NOT_FOUND_BODY_PATTERN.test(bodyText)) {
+    return new ProviderExecutionError(
+      "model-not-found",
+      provider,
+      `${provider} doesn't recognize this model string (HTTP ${status}): ${bodyText.slice(0, 300)}`,
+    );
   }
   return new ProviderExecutionError(
     "provider-error",

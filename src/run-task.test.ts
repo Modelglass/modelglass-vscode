@@ -442,6 +442,110 @@ describe("routeAndExecuteWithFallback", () => {
     assert.equal(result.outcome, "all-providers-failed");
     assert.equal(callCount, 1); // exactly one attempt -- no fallback possible with only one provider configured
   });
+
+  // -------------------------------------------------------------------------
+  // ADR-0012 Amendment 1 (SCO-281) — model-not-found same-provider retry.
+  // Pro-only (allowSameProviderRetry), narrow to this one failure kind.
+  // -------------------------------------------------------------------------
+
+  function modelNotFound(provider: string) {
+    return new ProviderExecutionError("model-not-found", provider, `${provider} doesn't recognize this model string (HTTP 404): `);
+  }
+
+  test("SCO-281: model-not-found on the top-ranked model retries the SAME provider's next-best model, and succeeds there without touching the next provider", async () => {
+    const openaiTop = makeModel({ name: "OpenAITop", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.9)] });
+    const openaiSecond = makeModel({ name: "OpenAISecond", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.5)] });
+    const anthropicModel = makeModel({ name: "AnthropicModel", provider: "anthropic", benchmarks: [bench("swe-bench-pro", 0.4)] });
+
+    const calls: string[] = [];
+    const stubExecute = async (provider: string, _k: string, modelId: string): Promise<ExecuteResult> => {
+      calls.push(modelId);
+      if (modelId === openaiTop.modelId) throw modelNotFound("openai");
+      return { text: "done", modelIdUsed: modelId };
+    };
+
+    const configured: ConfiguredProviderKey[] = [
+      { provider: "openai", apiKey: "sk-openai" },
+      { provider: "anthropic", apiKey: "sk-anthropic" },
+    ];
+
+    const result = await routeAndExecuteWithFallback(
+      [openaiTop, openaiSecond, anthropicModel],
+      configured,
+      "bug-fix",
+      "task",
+      stubExecute,
+      undefined,
+      /* allowSameProviderRetry */ true,
+    );
+
+    assert.equal(result.outcome, "success");
+    assert.equal(result.outcome === "success" && result.topModel.name, "OpenAISecond");
+    // Never reached anthropic -- the same-provider retry alone resolved it.
+    assert.deepEqual(calls, [openaiTop.modelId, openaiSecond.modelId]);
+    // Both the failed top attempt AND the successful retry are recorded,
+    // both attributed to openai (SCO-260 item #4's per-hop logging sees both).
+    assert.equal(result.outcome === "success" && result.attempts.length, 2);
+    assert.equal(result.outcome === "success" && result.attempts[0]!.provider, "openai");
+    assert.equal(result.outcome === "success" && result.attempts[1]!.provider, "openai");
+  });
+
+  test("SCO-281: when the same-provider retry ALSO fails (or there's no second model), falls through to the next provider as before", async () => {
+    const openaiOnly = makeModel({ name: "OpenAIOnly", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.9)] });
+    const anthropicModel = makeModel({ name: "AnthropicModel", provider: "anthropic", benchmarks: [bench("swe-bench-pro", 0.4)] });
+
+    const calls: string[] = [];
+    const stubExecute = async (provider: string, _k: string, modelId: string): Promise<ExecuteResult> => {
+      calls.push(provider);
+      if (provider === "openai") throw modelNotFound("openai");
+      return { text: "done", modelIdUsed: modelId };
+    };
+
+    const configured: ConfiguredProviderKey[] = [
+      { provider: "openai", apiKey: "sk-openai" },
+      { provider: "anthropic", apiKey: "sk-anthropic" },
+    ];
+
+    const result = await routeAndExecuteWithFallback(
+      [openaiOnly, anthropicModel],
+      configured,
+      "bug-fix",
+      "task",
+      stubExecute,
+      undefined,
+      /* allowSameProviderRetry */ true,
+    );
+
+    assert.equal(result.outcome, "success");
+    assert.equal(result.outcome === "success" && result.topModel.name, "AnthropicModel");
+    // openai called once, NOT retried a second time (no second model exists
+    // for it), then advances to anthropic -- exactly one openai attempt.
+    assert.deepEqual(calls, ["openai", "anthropic"]);
+  });
+
+  test("SCO-281: Starter (allowSameProviderRetry omitted/false) is unaffected -- no same-provider retry even on model-not-found, per ADR-0012 Amendment 1", async () => {
+    const openaiTop = makeModel({ name: "OpenAITop", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.9)] });
+    const openaiSecond = makeModel({ name: "OpenAISecond", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.5)] });
+
+    let callCount = 0;
+    const stubExecute = async (): Promise<ExecuteResult> => {
+      callCount += 1;
+      throw modelNotFound("openai");
+    };
+
+    // No allowSameProviderRetry argument at all -- this is exactly how
+    // Starter's single-provider call site invokes this function today.
+    const result = await routeAndExecuteWithFallback(
+      [openaiTop, openaiSecond],
+      [{ provider: "openai", apiKey: "sk-openai" }],
+      "bug-fix",
+      "task",
+      stubExecute,
+    );
+
+    assert.equal(result.outcome, "all-providers-failed");
+    assert.equal(callCount, 1); // no retry attempted, despite a second openai model being available
+  });
 });
 
 // ---------------------------------------------------------------------------

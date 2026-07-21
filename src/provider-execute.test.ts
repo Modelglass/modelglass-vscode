@@ -130,6 +130,44 @@ describe("executeProviderCall — OpenAI-compatible adapter", () => {
       },
     );
   });
+
+  test("ADR-0012 Amendment 1 (SCO-281): 404 classifies as model-not-found, not provider-error", async () => {
+    globalThis.fetch = (async () => jsonResponse(404, { error: "not found" })) as typeof fetch;
+    await assert.rejects(
+      () => executeProviderCall("together-ai", "tk-test", "meta/llama-4-nonexistent", "hi"),
+      (e: unknown) => {
+        assert.ok(e instanceof ProviderExecutionError);
+        assert.equal(e.kind, "model-not-found");
+        return true;
+      },
+    );
+  });
+
+  test("ADR-0012 Amendment 1 (SCO-281): a 400 with a 'model does not exist' body also classifies as model-not-found, since the HTTP status alone is ambiguous", async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(400, { error: { message: "The model `gpt-9000` does not exist" } })) as typeof fetch;
+    await assert.rejects(
+      () => executeProviderCall("openai", "sk-test", "openai/gpt-9000", "hi"),
+      (e: unknown) => {
+        assert.ok(e instanceof ProviderExecutionError);
+        assert.equal(e.kind, "model-not-found");
+        return true;
+      },
+    );
+  });
+
+  test("a genuine 400 with no model-not-found wording still classifies as provider-error, not swept into model-not-found", async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(400, { error: { message: "max_tokens must be a positive integer" } })) as typeof fetch;
+    await assert.rejects(
+      () => executeProviderCall("openai", "sk-test", "openai/gpt-5.5", "hi"),
+      (e: unknown) => {
+        assert.ok(e instanceof ProviderExecutionError);
+        assert.equal(e.kind, "provider-error");
+        return true;
+      },
+    );
+  });
 });
 
 describe("executeProviderCall — Anthropic adapter", () => {
