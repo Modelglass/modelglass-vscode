@@ -11,7 +11,7 @@ import {
   routeAndExecuteWithFallback,
 } from "./run-task-lib.js";
 import { loadRoutingRules } from "./routing-rules.js";
-import { checkProAccess, proGatedValue, selectProvidersForRun } from "./pro-gate-lib.js";
+import { checkProAccess, isGateSatisfied, proGatedValue, selectProvidersForRun } from "./pro-gate-lib.js";
 import { promptUpgradeToPro } from "./pro-gate.js";
 
 /**
@@ -115,6 +115,10 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
         prompt.trim(),
         undefined,
         rule,
+        // ADR-0012 Amendment 1 (SCO-281): the same-provider model-not-found
+        // retry is a Pro-tier capability by design — gated the same way
+        // every other Pro/Starter distinction in this file already is.
+        isGateSatisfied(proStatus),
       );
 
       switch (result.outcome) {
