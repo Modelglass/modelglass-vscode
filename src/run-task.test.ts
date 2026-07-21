@@ -82,6 +82,10 @@ describe("routeAndExecute", () => {
     assert.equal(outcome.outcome === "success" && outcome.topModel.name, "OpenAI Strong");
     assert.equal(outcome.outcome === "success" && outcome.rankedCount, 2); // only the two openai models
     assert.equal(outcome.outcome === "success" && outcome.execution.text, "the fix is...");
+    // SCO-260 quick-win #2/#5: previously computed but dropped before reaching the caller.
+    assert.match(outcome.outcome === "success" ? outcome.scoreLabel : "", /swe-bench pro/i);
+    assert.deepEqual(outcome.outcome === "success" ? outcome.unmatchedPriorityIds : null, []);
+    assert.equal(outcome.outcome === "success" ? outcome.excludedCount : null, 0);
 
     assert.equal(calls.length, 1);
     assert.equal(calls[0]!.provider, "openai");
@@ -176,6 +180,27 @@ describe("routeAndExecute", () => {
     assert.equal(withRule.outcome === "success" && withRule.ruleApplied, true);
 
     assert.deepEqual(calls, [benchmarkWinner.modelId, ruleWinner.modelId]);
+  });
+
+  test("SCO-260 quick-win #5: a typo'd priority entry surfaces via unmatchedPriorityIds, unnamed models via excludedCount", async () => {
+    const named = makeModel({ name: "Named", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.5)] });
+    const unnamed = makeModel({ name: "Unnamed", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.9)] });
+
+    const stubExecute = async (_p: string, _k: string, modelId: string): Promise<ExecuteResult> => ({
+      text: "done",
+      modelIdUsed: modelId,
+    });
+
+    const rule: RoutingRule = { category: "bug-fix", priority: [named.modelId, "openai/does-not-exist"] };
+    const outcome = await routeAndExecute([named, unnamed], "openai", "sk-test", "bug-fix", "task", stubExecute, rule);
+
+    assert.equal(outcome.outcome === "success" && outcome.topModel.name, "Named");
+    assert.deepEqual(
+      outcome.outcome === "success" ? outcome.unmatchedPriorityIds : null,
+      ["openai/does-not-exist"],
+    );
+    // "unnamed" isn't in the priority list, so priority's full-override behavior excludes it.
+    assert.equal(outcome.outcome === "success" ? outcome.excludedCount : null, 1);
   });
 
   test("a non-ProviderExecutionError thrown by executeFn is wrapped, not left uncaught", async () => {

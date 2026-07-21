@@ -61,6 +61,26 @@ describe("executeProviderCall — OpenAI-compatible adapter", () => {
     assert.equal(body.model, "gpt-5.5");
   });
 
+  test("SCO-260 quick-win #2: parses usage.prompt_tokens/completion_tokens into result.usage", async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(200, {
+        choices: [{ message: { content: "42" } }],
+        usage: { prompt_tokens: 120, completion_tokens: 8 },
+      })) as typeof fetch;
+
+    const result = await executeProviderCall("openai", "sk-test", "openai/gpt-5.5", "What is 6*7?");
+
+    assert.deepEqual(result.usage, { inputTokens: 120, outputTokens: 8 });
+  });
+
+  test("SCO-260 quick-win #2: usage is undefined, not crashed on, when the response omits it", async () => {
+    globalThis.fetch = (async () => jsonResponse(200, { choices: [{ message: { content: "42" } }] })) as typeof fetch;
+
+    const result = await executeProviderCall("openai", "sk-test", "openai/gpt-5.5", "What is 6*7?");
+
+    assert.equal(result.usage, undefined);
+  });
+
   test("401 classifies as invalid-key", async () => {
     globalThis.fetch = (async () => jsonResponse(401, { error: "bad key" })) as typeof fetch;
     await assert.rejects(
@@ -126,6 +146,18 @@ describe("executeProviderCall — Anthropic adapter", () => {
     assert.equal(result.modelIdUsed, "claude-sonnet-5");
     assert.equal(calls[0]!.url, "https://api.anthropic.com/v1/messages");
     assert.equal((calls[0]!.init.headers as Record<string, string>)["x-api-key"], "sk-ant-test");
+  });
+
+  test("SCO-260 quick-win #2: parses usage.input_tokens/output_tokens into result.usage", async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(200, {
+        content: [{ text: "hello there" }],
+        usage: { input_tokens: 45, output_tokens: 12 },
+      })) as typeof fetch;
+
+    const result = await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-sonnet-5", "hi");
+
+    assert.deepEqual(result.usage, { inputTokens: 45, outputTokens: 12 });
   });
 
   test("403 classifies as invalid-key", async () => {

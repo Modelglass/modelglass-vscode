@@ -30,9 +30,21 @@ export class ProviderExecutionError extends Error {
   }
 }
 
+/**
+ * SCO-260 quick-win #2 — both provider response shapes already carry token
+ * usage; it was being parsed as far as `text` and discarded from there.
+ * Optional because a provider response could theoretically omit or
+ * malform the usage block — callers must not assume it's always present.
+ */
+export interface ExecuteUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
 export interface ExecuteResult {
   text: string;
   modelIdUsed: string;
+  usage?: ExecuteUsage;
 }
 
 /**
@@ -160,12 +172,17 @@ async function executeOpenAiCompatible(
 
   const json = (await response.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
   const text = json.choices?.[0]?.message?.content;
   if (typeof text !== "string") {
     throw new ProviderExecutionError("provider-error", provider, "Response had no choices[0].message.content.");
   }
-  return { text, modelIdUsed: modelId };
+  const usage =
+    typeof json.usage?.prompt_tokens === "number" && typeof json.usage?.completion_tokens === "number"
+      ? { inputTokens: json.usage.prompt_tokens, outputTokens: json.usage.completion_tokens }
+      : undefined;
+  return { text, modelIdUsed: modelId, usage };
 }
 
 async function executeAnthropic(
@@ -209,12 +226,19 @@ async function executeAnthropic(
     throw classifyHttpFailure("anthropic", response.status, await response.text());
   }
 
-  const json = (await response.json()) as { content?: Array<{ text?: string }> };
+  const json = (await response.json()) as {
+    content?: Array<{ text?: string }>;
+    usage?: { input_tokens?: number; output_tokens?: number };
+  };
   const text = json.content?.[0]?.text;
   if (typeof text !== "string") {
     throw new ProviderExecutionError("provider-error", "anthropic", "Response had no content[0].text.");
   }
-  return { text, modelIdUsed: modelId };
+  const usage =
+    typeof json.usage?.input_tokens === "number" && typeof json.usage?.output_tokens === "number"
+      ? { inputTokens: json.usage.input_tokens, outputTokens: json.usage.output_tokens }
+      : undefined;
+  return { text, modelIdUsed: modelId, usage };
 }
 
 /**

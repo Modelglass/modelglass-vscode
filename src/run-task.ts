@@ -139,17 +139,45 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
           );
           return;
         }
-        case "success":
+        case "success": {
           output.appendLine(
             `[run-task] ${CATEGORY_LABELS[result.category]} -> ${result.topModel.name} (${result.execution.modelIdUsed}), ` +
               `ranked #1 of ${result.rankedCount} model(s) from ${result.topModel.provider}` +
               (result.attempts.length > 1 ? ` — succeeded after ${result.attempts.length - 1} provider fallback(s)` : "") +
               (result.ruleApplied ? " — .modelglass/routing-rules.json override applied for this category" : ""),
           );
+          output.appendLine(`[run-task] selected on: ${result.scoreLabel}`);
+
+          const { inputPricePerM, outputPricePerM } = result.topModel;
+          if (inputPricePerM !== null && outputPricePerM !== null) {
+            output.appendLine(`[run-task] price: $${inputPricePerM}/M input, $${outputPricePerM}/M output`);
+            if (result.execution.usage) {
+              const { inputTokens, outputTokens } = result.execution.usage;
+              const cost = (inputTokens * inputPricePerM + outputTokens * outputPricePerM) / 1_000_000;
+              output.appendLine(
+                `[run-task] actual cost: $${cost.toFixed(4)} (${inputTokens} in / ${outputTokens} out tokens)`,
+              );
+            }
+          }
+
+          if (result.unmatchedPriorityIds.length > 0) {
+            output.appendLine(
+              `[run-task] warning: routing-rules.json's priority list for "${CATEGORY_LABELS[result.category]}" has ` +
+                `${result.unmatchedPriorityIds.length} entr${result.unmatchedPriorityIds.length === 1 ? "y" : "ies"} ` +
+                `that matched no configured model: ${result.unmatchedPriorityIds.join(", ")}`,
+            );
+          }
+          if (result.excludedCount > 0) {
+            output.appendLine(
+              `[run-task] ${result.excludedCount} model(s) excluded from ranking by routing-rules.json for this category`,
+            );
+          }
+
           output.appendLine(result.execution.text);
           output.show(true);
           vscode.window.showInformationMessage(`Modelglass: ran on ${result.topModel.name} — see the Modelglass output channel.`);
           return;
+        }
       }
     },
   );
