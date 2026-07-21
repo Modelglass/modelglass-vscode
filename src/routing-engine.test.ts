@@ -14,6 +14,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  normaliseOfferings,
   rankAgenticMultiStep,
   rankAutocomplete,
   rankBugFix,
@@ -24,6 +25,8 @@ import {
   rankRefactor,
   rankTerminalCli,
   rankTestGen,
+  type ModelEntry,
+  type Offering,
   type RoutableModel,
 } from "./routing-engine.js";
 
@@ -47,6 +50,127 @@ function makeModel(overrides: Partial<RoutableModel> & { name: string }): Routab
 function bench(benchmark: string, score: number, extra: Partial<{ variant: string; harness: string }> = {}) {
   return { benchmark, score, source: { url: "https://example.test", type: "vendor" }, ...extra };
 }
+
+function makeOffering(overrides: Partial<Offering> & { provider: string }): Offering {
+  return {
+    slug: `test-${overrides.provider}`,
+    tiers: [
+      { id: "input", pricing: [{ amount: 1, unit: "per_1m_tokens_input", effective_from: "2026-01-01" }] },
+      { id: "output", pricing: [{ amount: 2, unit: "per_1m_tokens_output", effective_from: "2026-01-01" }] },
+    ],
+    ...overrides,
+  };
+}
+
+function makeModelEntry(overrides: Partial<ModelEntry> & { model_id: string; name: string }): ModelEntry {
+  return { offerings: [], ...overrides };
+}
+
+// ---------------------------------------------------------------------------
+// SCO-260 item #9 / SCO-280 — normaliseOfferings: one RoutableModel per
+// offering, not one per model collapsed to its cheapest offering
+// ---------------------------------------------------------------------------
+
+describe("normaliseOfferings", () => {
+  test("a model with two provider offerings (the real case: llama-3.3-70b via Groq + Together) produces one entry per provider", () => {
+    const entry = makeModelEntry({
+      model_id: "meta/llama-3.3-70b",
+      name: "Llama 3.3 70B",
+      offerings: [
+        makeOffering({
+          provider: "groq",
+          slug: "llama-3-3-70b-groq",
+          tiers: [
+            { id: "input", pricing: [{ amount: 0.59, unit: "per_1m_tokens_input", effective_from: "2026-01-01" }] },
+            { id: "output", pricing: [{ amount: 0.79, unit: "per_1m_tokens_output", effective_from: "2026-01-01" }] },
+          ],
+        }),
+        makeOffering({
+          provider: "together-ai",
+          slug: "llama-3-3-70b-together-ai",
+          tiers: [
+            { id: "input", pricing: [{ amount: 0.88, unit: "per_1m_tokens_input", effective_from: "2026-01-01" }] },
+            { id: "output", pricing: [{ amount: 0.88, unit: "per_1m_tokens_output", effective_from: "2026-01-01" }] },
+          ],
+        }),
+      ],
+    });
+
+    const result = normaliseOfferings(entry);
+
+    assert.equal(result.length, 2);
+    const byProvider = new Map(result.map((r) => [r.provider, r]));
+    assert.equal(byProvider.get("groq")?.inputPricePerM, 0.59);
+    assert.equal(byProvider.get("together-ai")?.inputPricePerM, 0.88);
+    // The old behavior this replaces: only the cheaper (Groq) offering
+    // would have survived at all — a Together-keyed user saw nothing.
+    // Both must be present now, each carrying its OWN offering's price,
+    // not the globally-cheapest one.
+    assert.equal(result.every((r) => r.modelId === "meta/llama-3.3-70b"), true);
+  });
+
+  test("a synthetic current-gen multi-provider model (not just the one real legacy case) also produces one entry per offering", () => {
+    const entry = makeModelEntry({
+      model_id: "openai/synthetic-multi-host",
+      name: "Synthetic Multi-Host",
+      offerings: [
+        makeOffering({ provider: "openai", slug: "synthetic-multi-host-openai" }),
+        makeOffering({ provider: "openrouter", slug: "openai/synthetic-multi-host" }),
+        makeOffering({ provider: "together-ai", slug: "synthetic-multi-host-together-ai" }),
+      ],
+    });
+
+    const result = normaliseOfferings(entry);
+
+    assert.deepEqual(
+      result.map((r) => r.provider).sort(),
+      ["openai", "openrouter", "together-ai"],
+    );
+    // Regression guard: this must never again collapse to a single winner.
+    assert.equal(result.length, entry.offerings.length);
+  });
+
+  test("a single-offering model (the common case) behaves exactly as before — one entry, unchanged", () => {
+    const entry = makeModelEntry({
+      model_id: "anthropic/claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      offerings: [makeOffering({ provider: "anthropic", slug: "claude-sonnet-5-anthropic" })],
+    });
+
+    const result = normaliseOfferings(entry);
+
+    assert.equal(result.length, 1);
+    assert.equal(result[0]!.provider, "anthropic");
+  });
+
+  test("a model with zero offerings still produces exactly one placeholder entry, matching the old function's behavior", () => {
+    const entry = makeModelEntry({ model_id: "vendor/benchmark-only", name: "Benchmark Only" });
+
+    const result = normaliseOfferings(entry);
+
+    assert.equal(result.length, 1);
+    assert.equal(result[0]!.provider, "");
+    assert.equal(result[0]!.slug, "vendor/benchmark-only");
+    assert.equal(result[0]!.inputPricePerM, null);
+  });
+
+  test("benchmarks and capability are copied onto every offering's entry, not just the first", () => {
+    const entry = makeModelEntry({
+      model_id: "meta/llama-3.3-70b",
+      name: "Llama 3.3 70B",
+      knowledge: { benchmarks: [bench("swe-bench-pro", 0.5)], capability_profile: [{ dimension: "coding", rating: "strong" }] },
+      offerings: [makeOffering({ provider: "groq" }), makeOffering({ provider: "together-ai" })],
+    });
+
+    const result = normaliseOfferings(entry);
+
+    assert.equal(result.length, 2);
+    for (const r of result) {
+      assert.equal(r.benchmarks.length, 1);
+      assert.equal(r.capability.get("coding"), "strong");
+    }
+  });
+});
 
 // ---------------------------------------------------------------------------
 // 3.1 Bug-fix — clean mapping (SWE-bench Pro preferred, Verified fallback)

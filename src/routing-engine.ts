@@ -138,23 +138,57 @@ function currentPrice(tiers: Tier[], id: string): number | null {
   return [...tier.pricing].sort((a, b) => (a.effective_from > b.effective_from ? -1 : 1))[0]!.amount;
 }
 
-export function normalise(m: ModelEntry): RoutableModel {
-  const offering = [...m.offerings].sort(
-    (a, b) => (currentPrice(a.tiers, "input") ?? Infinity) - (currentPrice(b.tiers, "input") ?? Infinity),
-  )[0];
+/**
+ * SCO-260 item #9 / SCO-280 — one `RoutableModel` per offering, not one per
+ * model collapsed to its cheapest offering. The previous behavior
+ * (`normalise`, singular — picked the single cheapest-input-price offering
+ * and used only that offering's provider) meant a model hosted by more than
+ * one provider was only ever routable through whichever host happened to be
+ * cheapest: a user keyed to the *other* provider couldn't route to it at
+ * all, even though that provider genuinely offers it (confirmed live,
+ * `llama-3.3-70b` via Groq + Together — Together is cheaper, so a
+ * Groq-keyed user saw zero offerings for it before this change). Every
+ * caller already filters `RoutableModel[]` by `.provider` before ranking
+ * (`run-task-lib.ts`'s `routeAndExecute`), so returning multiple entries —
+ * one per offering, each carrying that offering's own price — composes with
+ * the existing filter-then-rank pipeline with no other changes needed.
+ *
+ * A model with zero offerings (benchmark/capability data only, no priced
+ * hosting) still produces exactly one entry, matching the old function's
+ * behavior for that case: empty `provider`, null prices, keyed by
+ * `model_id` since there's no offering `slug` to use.
+ */
+export function normaliseOfferings(m: ModelEntry): RoutableModel[] {
   const capability = new Map(
     (m.knowledge?.capability_profile ?? []).map((d) => [d.dimension, d.rating] as const),
   );
-  return {
+  const benchmarks = m.knowledge?.benchmarks ?? [];
+
+  if (m.offerings.length === 0) {
+    return [
+      {
+        name: m.name,
+        slug: m.model_id,
+        provider: "",
+        modelId: m.model_id,
+        benchmarks,
+        capability,
+        inputPricePerM: null,
+        outputPricePerM: null,
+      },
+    ];
+  }
+
+  return m.offerings.map((offering) => ({
     name: m.name,
-    slug: offering?.slug ?? m.model_id,
-    provider: offering?.provider ?? "",
+    slug: offering.slug,
+    provider: offering.provider,
     modelId: m.model_id,
-    benchmarks: m.knowledge?.benchmarks ?? [],
+    benchmarks,
     capability,
-    inputPricePerM: offering ? currentPrice(offering.tiers, "input") : null,
-    outputPricePerM: offering ? currentPrice(offering.tiers, "output") : null,
-  };
+    inputPricePerM: currentPrice(offering.tiers, "input"),
+    outputPricePerM: currentPrice(offering.tiers, "output"),
+  }));
 }
 
 /**
