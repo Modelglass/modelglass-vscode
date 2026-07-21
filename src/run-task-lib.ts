@@ -1,6 +1,6 @@
 import {
   fetchLLMModels,
-  normalise,
+  normaliseOfferings,
   type LeafTaskCategory,
   type RoutableModel,
 } from "./routing-engine.js";
@@ -16,9 +16,11 @@ import { resolveCategoryRanking, type RoutingRule } from "./routing-rules-lib.js
  *
  * Modelglass-default rules only (SCO-230's rankModelsForCategory, unmodified
  * — no awkwardness found calling it from here: `RoutableModel.provider` is
- * already populated by routing-engine.ts's own `normalise()`, so filtering
- * to the configured provider before ranking is a plain `.filter()`, nothing
- * more). No user override/weighting (SCO-231) and no multi-key/fallback
+ * already populated by routing-engine.ts's own `normaliseOfferings()` (one
+ * entry per offering as of SCO-280 — a model hosted by more than one
+ * provider produces one `RoutableModel` per host, not just its cheapest),
+ * so filtering to the configured provider before ranking is a plain
+ * `.filter()`, nothing more). No user override/weighting (SCO-231) and no multi-key/fallback
  * chains (SCO-233) — deliberately not built here, per the card's explicit
  * instruction not to add hooks inviting either even where the code would
  * make it tempting (e.g. `routeAndExecute` takes exactly one provider + one
@@ -350,7 +352,7 @@ export async function fetchRoutableModels(
   }
 
   try {
-    const models = (await fetchFn(modelglassApiKey)).map(normalise);
+    const models = (await fetchFn(modelglassApiKey)).flatMap(normaliseOfferings);
     feedCache = { models, fetchedAt: now };
     return models;
   } catch (e) {
