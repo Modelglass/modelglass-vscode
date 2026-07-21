@@ -57,6 +57,19 @@ export type RouteAndExecuteOutcome =
       /** SCO-231 — whether a .modelglass/routing-rules.json rule changed
        *  this category's ranking (vs. SCO-230's default engine, untouched). */
       ruleApplied: boolean;
+      /** SCO-260 quick-win #2 — why topModel won, already computed by the
+       *  ranking engine (e.g. "SWE-bench Pro 69.2%") and previously dropped
+       *  here rather than surfaced to the caller. */
+      scoreLabel: string;
+      /** SCO-260 quick-win #5 — routing-rules.json `priority` entries that
+       *  matched no model in the pool (typo, retired/renamed model). Empty
+       *  when no rule applied or the rule wasn't a priority override. */
+      unmatchedPriorityIds: string[];
+      /** SCO-260 quick-win #5 — count of models a rule excluded from
+       *  ranking for this category. Individual reasons live on
+       *  resolveCategoryRanking's own `excluded` array; only the count is
+       *  threaded through here to keep this outcome type small. */
+      excludedCount: number;
     }
   | {
       outcome: "no-provider-models";
@@ -232,6 +245,9 @@ export async function routeAndExecute(
       rankedCount: ranking.ranked.length,
       execution,
       ruleApplied: ranking.ruleApplied,
+      scoreLabel: top.scoreLabel,
+      unmatchedPriorityIds: ranking.unmatchedPriorityIds,
+      excludedCount: ranking.excluded.length,
     };
   } catch (e) {
     const error =
