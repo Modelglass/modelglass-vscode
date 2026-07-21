@@ -20,10 +20,12 @@ import assert from "node:assert/strict";
 import {
   __resetFeedCacheForTests,
   FEED_CACHE_TTL_MS,
+  describeAttempt,
   fetchRoutableModels,
   routeAndExecute,
   routeAndExecuteWithFallback,
   type ConfiguredProviderKey,
+  type ProviderAttempt,
 } from "./run-task-lib.js";
 import { ProviderExecutionError, type ExecuteResult } from "./provider-execute.js";
 import type { RoutingRule } from "./routing-rules-lib.js";
@@ -44,6 +46,37 @@ function makeModel(overrides: Partial<RoutableModel> & { name: string; provider:
 function bench(benchmark: string, score: number) {
   return { benchmark, score, source: { url: "https://example.test", type: "vendor" } };
 }
+
+describe("describeAttempt", () => {
+  test("SCO-260 quick-win #4/#7: execution-failed delegates to describeFailure's classified message", () => {
+    const attempt: ProviderAttempt = {
+      provider: "openai",
+      result: {
+        outcome: "execution-failed",
+        category: "bug-fix",
+        topModel: makeModel({ name: "M", provider: "openai" }),
+        error: new ProviderExecutionError("invalid-key", "openai", "OpenAI rejected the API key (HTTP 401)."),
+      },
+    };
+    assert.equal(describeAttempt(attempt), "your stored openai key was rejected (invalid or revoked)");
+  });
+
+  test("SCO-260 quick-win #4: no-ranked-models is labeled as a skip, not a generic outcome string", () => {
+    const attempt: ProviderAttempt = {
+      provider: "groq",
+      result: { outcome: "no-ranked-models", category: "bug-fix", provider: "groq" },
+    };
+    assert.equal(describeAttempt(attempt), "skipped — no ranked models for this category");
+  });
+
+  test("SCO-260 quick-win #4: other non-execution outcomes fall through to their raw outcome string", () => {
+    const attempt: ProviderAttempt = {
+      provider: "groq",
+      result: { outcome: "no-provider-models", category: "bug-fix", provider: "groq" },
+    };
+    assert.equal(describeAttempt(attempt), "no-provider-models");
+  });
+});
 
 describe("routeAndExecute", () => {
   test("happy path: filters by provider, ranks, and executes against the top model", async () => {

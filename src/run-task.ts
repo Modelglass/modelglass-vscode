@@ -6,7 +6,7 @@ import { getConfiguredProviders } from "./provider-keys-lib.js";
 import {
   CATEGORY_LABELS,
   LEAF_CATEGORIES,
-  describeFailure,
+  describeAttempt,
   fetchRoutableModels,
   routeAndExecuteWithFallback,
 } from "./run-task-lib.js";
@@ -129,17 +129,41 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
           );
           return;
         case "all-providers-failed": {
-          const summary = result.attempts
-            .map((a) => `${a.provider}: ${a.result.outcome === "execution-failed" ? describeFailure(a.result.error) : a.result.outcome}`)
-            .join("; ");
+          // SCO-260 quick-win #4: each hop logged as it's known, not just
+          // folded into a summary after everything has already failed.
+          for (const attempt of result.attempts) {
+            output.appendLine(`[run-task] ${attempt.provider}: ${describeAttempt(attempt)}`);
+          }
+          const summary = result.attempts.map((a) => `${a.provider}: ${describeAttempt(a)}`).join("; ");
           output.appendLine(`[run-task] every configured provider failed for "${CATEGORY_LABELS[result.category]}" — ${summary}`);
-          vscode.window.showErrorMessage(
-            `Modelglass: tried ${result.attempts.length} configured provider(s) for "${CATEGORY_LABELS[result.category]}" — ` +
-              `all failed (${summary}). No further automatic retry — fix a key or try again by re-running the command.`,
+
+          // SCO-260 quick-win #7: an actual re-entry path, not just a
+          // "fix a key" instruction with nothing to click. Not scoped to
+          // the specific invalid-key provider(s) — promptAndSetProviderKey
+          // is a single-key-replace flow (Starter's model); which key a
+          // multi-provider Pro user should re-enter isn't unambiguous when
+          // more than one provider in the chain failed on invalid-key, so
+          // that refinement is left for a future pass rather than guessed
+          // at here.
+          const hasInvalidKey = result.attempts.some(
+            (a) => a.result.outcome === "execution-failed" && a.result.error.kind === "invalid-key",
           );
+          const choice = await vscode.window.showErrorMessage(
+            `Modelglass: tried ${result.attempts.length} configured provider(s) for "${CATEGORY_LABELS[result.category]}" — ` +
+              `all failed (${summary}). No further automatic retry — try again by re-running the command.`,
+            ...(hasInvalidKey ? ["Set Provider API Key"] : []),
+          );
+          if (choice === "Set Provider API Key") await promptAndSetProviderKey(context);
           return;
         }
         case "success": {
+          // SCO-260 quick-win #4: log each hop that failed before the one
+          // that succeeded, not just a bare fallback count.
+          if (result.attempts.length > 1) {
+            for (const attempt of result.attempts.slice(0, -1)) {
+              output.appendLine(`[run-task] ${attempt.provider} failed, trying next provider — ${describeAttempt(attempt)}`);
+            }
+          }
           output.appendLine(
             `[run-task] ${CATEGORY_LABELS[result.category]} -> ${result.topModel.name} (${result.execution.modelIdUsed}), ` +
               `ranked #1 of ${result.rankedCount} model(s) from ${result.topModel.provider}` +

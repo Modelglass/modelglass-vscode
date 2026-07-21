@@ -273,6 +273,26 @@ export function describeFailure(error: ProviderExecutionError): string {
   }
 }
 
+/**
+ * SCO-260 quick-win #4 — a single hop's outcome, human-readable, for both
+ * the per-hop "as it happens" log line and the terminal joined summary
+ * (both now built from this one function instead of two separately-
+ * maintained copies of the same conditional). Distinguishes an actual
+ * execution failure (classified via describeFailure) from a provider that
+ * was skipped entirely for having no ranked models for this category, per
+ * SCO-260's own phrasing ("also worth noting providers skipped entirely for
+ * having no ranked models").
+ */
+export function describeAttempt(attempt: ProviderAttempt): string {
+  if (attempt.result.outcome === "execution-failed") {
+    return describeFailure(attempt.result.error);
+  }
+  if (attempt.result.outcome === "no-ranked-models") {
+    return "skipped — no ranked models for this category";
+  }
+  return attempt.result.outcome;
+}
+
 // ---------------------------------------------------------------------------
 // SCO-264 — quick-win local cache for the model/benchmark feed. Every Run
 // Task invocation used to make its own uncached GET /v1/models?modality=llm
