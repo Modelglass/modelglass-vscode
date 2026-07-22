@@ -127,6 +127,62 @@ describe("routeAndExecute", () => {
     assert.equal(calls[0]!.prompt, "Fix the off-by-one in the paginator");
   });
 
+  // SCO-283
+  test("threads the ranked model's providerModelId through to executeFn's 6th arg, when set", async () => {
+    const withExplicitId = makeModel({
+      name: "OpenRouter Qwen",
+      provider: "openrouter",
+      modelId: "alibaba/qwen-3-235b-a22b",
+      providerModelId: "qwen/qwen3-235b-a22b",
+      benchmarks: [bench("swe-bench-pro", 0.7)],
+    });
+
+    const calls: Array<{ modelId: string; explicitId: string | undefined }> = [];
+    const stubExecute = async (
+      _provider: string,
+      _apiKey: string,
+      modelId: string,
+      _prompt: string,
+      _timeoutMs?: number,
+      explicitProviderModelId?: string,
+    ): Promise<ExecuteResult> => {
+      calls.push({ modelId, explicitId: explicitProviderModelId });
+      return { text: "ok", modelIdUsed: explicitProviderModelId ?? modelId };
+    };
+
+    await routeAndExecute([withExplicitId], "openrouter", "sk-test", "bug-fix", "prompt", stubExecute);
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.modelId, "alibaba/qwen-3-235b-a22b");
+    assert.equal(calls[0]!.explicitId, "qwen/qwen3-235b-a22b");
+  });
+
+  test("passes undefined for executeFn's 6th arg when the ranked model has no providerModelId", async () => {
+    const noExplicitId = makeModel({
+      name: "OpenAI Strong",
+      provider: "openai",
+      benchmarks: [bench("swe-bench-pro", 0.7)],
+    });
+
+    const calls: Array<string | undefined> = [];
+    const stubExecute = async (
+      _provider: string,
+      _apiKey: string,
+      modelId: string,
+      _prompt: string,
+      _timeoutMs?: number,
+      explicitProviderModelId?: string,
+    ): Promise<ExecuteResult> => {
+      calls.push(explicitProviderModelId);
+      return { text: "ok", modelIdUsed: modelId };
+    };
+
+    await routeAndExecute([noExplicitId], "openai", "sk-test", "bug-fix", "prompt", stubExecute);
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0], undefined);
+  });
+
   test("no models at all for the configured provider", async () => {
     const anthropicOnly = makeModel({ name: "Anthropic Model", provider: "anthropic", benchmarks: [bench("swe-bench-pro", 0.9)] });
     const stubExecute = async (): Promise<ExecuteResult> => {

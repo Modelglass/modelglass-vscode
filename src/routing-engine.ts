@@ -55,6 +55,9 @@ export interface Offering {
   slug: string;
   provider: string;
   tiers: Tier[];
+  /** SCO-283: the provider-native model string to call, when it genuinely
+   *  differs from what resolveProviderModelId()'s heuristic would derive. */
+  provider_model_id?: string;
 }
 
 export interface ModelEntry {
@@ -123,6 +126,10 @@ export interface RoutableModel {
   capability: Map<string, string>; // dimension -> rating, as authored (not yet numeric)
   inputPricePerM: number | null;
   outputPricePerM: number | null;
+  /** SCO-283: the offering's explicit provider_model_id, when the registry
+   *  sets one -- undefined for the common case, in which case
+   *  resolveProviderModelId()'s heuristic derives it from modelId instead. */
+  providerModelId?: string;
 }
 
 /** Active price: the entry with no effective_to (still in force), falling
@@ -188,6 +195,7 @@ export function normaliseOfferings(m: ModelEntry): RoutableModel[] {
     capability,
     inputPricePerM: currentPrice(offering.tiers, "input"),
     outputPricePerM: currentPrice(offering.tiers, "output"),
+    providerModelId: offering.provider_model_id,
   }));
 }
 

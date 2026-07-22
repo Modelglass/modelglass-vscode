@@ -95,6 +95,9 @@ export type ExecuteFn = (
   apiKey: string,
   modelId: string,
   prompt: string,
+  timeoutMs?: number,
+  /** SCO-283: the ranked model's own RoutableModel.providerModelId, when set. */
+  explicitProviderModelId?: string,
 ) => Promise<ExecuteResult>;
 
 // ---------------------------------------------------------------------------
@@ -294,7 +297,14 @@ export async function routeAndExecute(
   }
 
   try {
-    const execution = await executeFn(provider, providerApiKey, top.model.modelId, prompt);
+    const execution = await executeFn(
+      provider,
+      providerApiKey,
+      top.model.modelId,
+      prompt,
+      undefined,
+      top.model.providerModelId,
+    );
     return {
       outcome: "success",
       category,

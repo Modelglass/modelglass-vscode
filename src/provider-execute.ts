@@ -74,25 +74,41 @@ function isAbortError(e: unknown): boolean {
 }
 
 /**
- * Known gap, documented rather than silently assumed correct: the
- * Modelglass registry has no field for the literal provider-API model
- * identifier — `model.id` (`creator-org/model-name`) and the registry
- * `slug` are both internal Modelglass conventions. This heuristic strips
- * the `creator-org/` prefix by default, which matches OpenAI/DeepSeek/xAI/
- * Mistral/Groq's own model-string conventions closely enough to work for
- * their current lineups. Two known-unreliable cases:
- *  - OpenRouter expects the FULL `creator-org/model-name` string (its own
- *    routing convention happens to match Modelglass's `model.id` shape
- *    exactly) — handled as an explicit exception below, not a coincidence
- *    to rely on elsewhere.
- *  - Together AI's model strings don't reliably match either the stripped
- *    or full form (they carry their own suffixes/casing); Anthropic's real
- *    model strings are often date-suffixed (e.g. `claude-...-20250219`)
- *    which the registry doesn't track. Both are left as-is (best-effort
- *    strip) with the gap called out here and in the PR description — not
- *    papered over with an invented mapping table this module can't verify.
+ * SCO-283: the Modelglass registry now carries an explicit, optional
+ * `provider_model_id` per offering — the real, provider-native model
+ * string, set directly on the registry entry when the heuristic below
+ * would derive the wrong thing. When present, it wins outright; the
+ * heuristic never runs. This is the actual fix for the gap this function
+ * used to just document -- see the two confirmed-live cases backfilled
+ * with SCO-283: Together AI (Llama 4 Scout/Maverick/Qwen 2.5 72B are
+ * NOT in Together's current serverless catalog at all -- deliberately
+ * not backfilled, a bigger question than this field can answer alone)
+ * and Qwen 3 235B-A22B on OpenRouter (registry model.id
+ * `alibaba/qwen-3-235b-a22b` vs OpenRouter's real `qwen/qwen3-235b-a22b`
+ * -- confirmed via a live fetch of OpenRouter's own /api/v1/models).
+ *
+ * Historical context, still accurate for every offering that HASN'T been
+ * backfilled: the Modelglass registry previously had no field for the
+ * literal provider-API model identifier at all — `model.id`
+ * (`creator-org/model-name`) and the registry `slug` are both internal
+ * Modelglass conventions. This heuristic strips the `creator-org/` prefix
+ * by default, which matches OpenAI/DeepSeek/xAI/Mistral/Groq/Anthropic's
+ * own model-string conventions closely enough to work for their current
+ * lineups (Anthropic specifically: confirmed live 2026-07-22 that its
+ * undated alias form, e.g. `claude-sonnet-5`, is a real supported string
+ * — the stripped heuristic output happens to already be correct there).
+ * OpenRouter is a documented exception: it expects the FULL
+ * `creator-org/model-name` string by default (its own routing convention
+ * happens to match Modelglass's `model.id` shape for some models) — that
+ * fallback is still wrong for any OpenRouter offering without an explicit
+ * `provider_model_id`, per the Qwen 3 235B case above.
  */
-export function resolveProviderModelId(provider: SupportedProvider, modelId: string): string {
+export function resolveProviderModelId(
+  provider: SupportedProvider,
+  modelId: string,
+  explicitProviderModelId?: string,
+): string {
+  if (explicitProviderModelId) return explicitProviderModelId;
   if (provider === "openrouter") return modelId;
   const slashIndex = modelId.indexOf("/");
   return slashIndex === -1 ? modelId : modelId.slice(slashIndex + 1);
@@ -268,7 +284,9 @@ async function executeAnthropic(
 /**
  * Runs `prompt` against `modelId` (a Modelglass `model.id`) using `apiKey`
  * for `provider`. Resolves the provider-specific model string via
- * `resolveProviderModelId` and dispatches to the matching adapter.
+ * `resolveProviderModelId` — preferring `explicitProviderModelId` (SCO-283,
+ * threaded from the registry offering's own `provider_model_id`) when the
+ * caller has one — and dispatches to the matching adapter.
  */
 export async function executeProviderCall(
   provider: SupportedProvider,
@@ -276,8 +294,9 @@ export async function executeProviderCall(
   modelId: string,
   prompt: string,
   timeoutMs: number = DEFAULT_PROVIDER_TIMEOUT_MS,
+  explicitProviderModelId?: string,
 ): Promise<ExecuteResult> {
-  const providerModelId = resolveProviderModelId(provider, modelId);
+  const providerModelId = resolveProviderModelId(provider, modelId, explicitProviderModelId);
 
   if (provider === "anthropic") {
     return executeAnthropic(apiKey, providerModelId, prompt, timeoutMs);
