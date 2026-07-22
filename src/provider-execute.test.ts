@@ -40,6 +40,29 @@ describe("resolveProviderModelId", () => {
   test("returns the id as-is when it has no prefix to strip", () => {
     assert.equal(resolveProviderModelId("mistral", "mistral-large-3"), "mistral-large-3");
   });
+
+  // SCO-283
+  test("an explicit provider_model_id wins outright, even for a provider the heuristic would otherwise handle fine", () => {
+    assert.equal(
+      resolveProviderModelId("openai", "openai/gpt-5.5", "gpt-5.5-turbo-preview"),
+      "gpt-5.5-turbo-preview",
+    );
+  });
+
+  test("an explicit provider_model_id overrides openrouter's full-string default too", () => {
+    assert.equal(
+      resolveProviderModelId("openrouter", "alibaba/qwen-3-235b-a22b", "qwen/qwen3-235b-a22b"),
+      "qwen/qwen3-235b-a22b",
+    );
+  });
+
+  test("falls through to the heuristic when no explicit id is passed (undefined)", () => {
+    assert.equal(resolveProviderModelId("together-ai", "meta/llama-3.3-70b", undefined), "llama-3.3-70b");
+  });
+
+  test("falls through to the heuristic when the explicit id is an empty string", () => {
+    assert.equal(resolveProviderModelId("together-ai", "meta/llama-3.3-70b", ""), "llama-3.3-70b");
+  });
 });
 
 describe("executeProviderCall — OpenAI-compatible adapter", () => {
@@ -59,6 +82,42 @@ describe("executeProviderCall — OpenAI-compatible adapter", () => {
     assert.equal((calls[0]!.init.headers as Record<string, string>)["authorization"], "Bearer sk-test");
     const body = JSON.parse(calls[0]!.init.body as string);
     assert.equal(body.model, "gpt-5.5");
+  });
+
+  // SCO-283
+  test("an explicit provider_model_id (6th arg) reaches the actual API call, not the heuristic-derived string", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return jsonResponse(200, { choices: [{ message: { content: "42" } }] });
+    }) as typeof fetch;
+
+    const result = await executeProviderCall(
+      "together-ai",
+      "sk-test",
+      "meta/llama-3.3-70b",
+      "What is 6*7?",
+      DEFAULT_PROVIDER_TIMEOUT_MS,
+      "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    );
+
+    assert.equal(result.modelIdUsed, "meta-llama/Llama-3.3-70B-Instruct-Turbo");
+    const body = JSON.parse(calls[0]!.init.body as string);
+    // Confirms the explicit id, not the heuristic's "llama-3.3-70b", was sent.
+    assert.equal(body.model, "meta-llama/Llama-3.3-70B-Instruct-Turbo");
+  });
+
+  test("without an explicit provider_model_id, the heuristic-derived string still reaches the API call unchanged", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return jsonResponse(200, { choices: [{ message: { content: "42" } }] });
+    }) as typeof fetch;
+
+    await executeProviderCall("together-ai", "sk-test", "meta/llama-3.3-70b", "What is 6*7?");
+
+    const body = JSON.parse(calls[0]!.init.body as string);
+    assert.equal(body.model, "llama-3.3-70b");
   });
 
   test("SCO-260 quick-win #2: parses usage.prompt_tokens/completion_tokens into result.usage", async () => {

@@ -113,6 +113,11 @@ export interface Offering {
   provider: string;
   quality_tier: string;
   tiers: Tier[];
+  /** SCO-283: the provider-native model string to call, when it genuinely
+   *  differs from what resolveProviderModelId()'s heuristic would derive.
+   *  Optional -- absent for the common case where the heuristic already
+   *  works. */
+  provider_model_id?: string;
 }
 
 export interface ModelEntry {
