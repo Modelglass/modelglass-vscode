@@ -82,16 +82,47 @@ interface ApiResponse {
 export const MODELGLASS_API =
   process.env["MODELGLASS_API_URL"] || "https://modelglass-api.vercel.app";
 
+/**
+ * SCO-260 quick-win #1 — this was the one Modelglass API fetch in the whole
+ * Run Task path with no bounded timeout: run-task-lib.ts's
+ * fetchRoutableModels wraps this function and already has a stale-cache
+ * fallback for a *rejected* fetch (SCO-264), but a *hung* one never rejects,
+ * so that fallback path was unreachable for exactly the failure mode it was
+ * built for. 15s — the same small metadata-fetch budget used for
+ * pro-gate-lib.ts/auth.ts's Modelglass API calls, not a model completion.
+ */
+export const DEFAULT_MODELGLASS_FETCH_TIMEOUT_MS = 15_000;
+
+function isAbortError(e: unknown): boolean {
+  return e instanceof Error && e.name === "AbortError";
+}
+
 /** Every current-generation LLM model — the routing pool. Deliberately
  *  ?modality=llm (matching ./lib.ts's fetchLLMModels), not switch-check's
  *  cross-modality ?generation=all: every taxonomy category routes an
  *  in-editor coding task to an LLM, never to an image/video/audio model,
  *  and a superseded previous-gen model has no place in a "which model
  *  should I use right now" recommendation. */
-export async function fetchLLMModels(apiKey: string): Promise<ModelEntry[]> {
-  const res = await fetch(`${MODELGLASS_API}/v1/models?modality=llm`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
+export async function fetchLLMModels(
+  apiKey: string,
+  timeoutMs: number = DEFAULT_MODELGLASS_FETCH_TIMEOUT_MS,
+): Promise<ModelEntry[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${MODELGLASS_API}/v1/models?modality=llm`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+    });
+  } catch (e) {
+    if (isAbortError(e)) {
+      throw new Error(`Modelglass API request timed out after ${timeoutMs}ms`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`Modelglass API ${res.status}: ${body}`);

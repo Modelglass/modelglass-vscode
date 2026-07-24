@@ -57,6 +57,20 @@ export function isProTierValue(tier: string): boolean {
 }
 
 /**
+ * SCO-260 quick-win #1 — this call had no bounded timeout: a hung Modelglass
+ * API response left checkProAccess (and everything gated behind it in
+ * run-task.ts) waiting indefinitely instead of failing open per its own
+ * documented contract below. 15s, not provider-execute.ts's 60s: this is a
+ * small metadata round-trip (one key validity check), not a model completion
+ * whose latency depends on generation length.
+ */
+export const DEFAULT_PRO_GATE_TIMEOUT_MS = 15_000;
+
+function isAbortError(e: unknown): boolean {
+  return e instanceof Error && e.name === "AbortError";
+}
+
+/**
  * Calls the same public `POST /v1/keys/validate` endpoint the iOS app's
  * UnlockScreen uses, with the user's own free Modelglass API key (from
  * auth.ts), and classifies the result. `fetchImpl` is injectable so this is
@@ -66,16 +80,25 @@ export async function checkProAccess(
   apiKey: string,
   fetchImpl: typeof fetch,
   apiBaseUrl: string = MODELGLASS_API,
+  timeoutMs: number = DEFAULT_PRO_GATE_TIMEOUT_MS,
 ): Promise<ProGateStatus> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
     response = await fetchImpl(`${apiBaseUrl}/v1/keys/validate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ key: apiKey }),
+      signal: controller.signal,
     });
   } catch (e) {
+    if (isAbortError(e)) {
+      return { isPro: false, reason: "network-error", message: `timed out waiting for a response after ${timeoutMs}ms` };
+    }
     return { isPro: false, reason: "network-error", message: e instanceof Error ? e.message : String(e) };
+  } finally {
+    clearTimeout(timer);
   }
 
   if (!response.ok) {

@@ -33,20 +33,42 @@ type ProvisionResult =
  */
 export const output = vscode.window.createOutputChannel("Modelglass");
 
-async function callProvision(): Promise<ProvisionResult> {
+/**
+ * SCO-260 quick-win #1 — this call had no bounded timeout: a hung Modelglass
+ * API response left ensureApiKey (called from every command's first
+ * activation) waiting indefinitely instead of reaching the "network" failure
+ * branch's Retry/Enter-key-manually recovery path below. 15s, matching
+ * pro-gate-lib.ts's DEFAULT_PRO_GATE_TIMEOUT_MS — this is the same class of
+ * small metadata round-trip, not a model completion.
+ */
+export const DEFAULT_PROVISION_TIMEOUT_MS = 15_000;
+
+function isAbortError(e: unknown): boolean {
+  return e instanceof Error && e.name === "AbortError";
+}
+
+async function callProvision(timeoutMs: number = DEFAULT_PROVISION_TIMEOUT_MS): Promise<ProvisionResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res: Response;
   try {
     res = await fetch(`${MODELGLASS_API}/v1/keys/provision`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ plan: "free" }),
+      signal: controller.signal,
     });
   } catch (e) {
+    if (isAbortError(e)) {
+      return { ok: false, reason: "network", message: `timed out waiting for a response after ${timeoutMs}ms` };
+    }
     return {
       ok: false,
       reason: "network",
       message: e instanceof Error ? e.message : String(e),
     };
+  } finally {
+    clearTimeout(timer);
   }
 
   if (res.status === 429) {
