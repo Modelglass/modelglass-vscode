@@ -13,6 +13,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  DEFAULT_PRO_GATE_TIMEOUT_MS,
   checkProAccess,
   isGateSatisfied,
   isProTierValue,
@@ -102,6 +103,43 @@ describe("checkProAccess", () => {
 
     assert.equal(capturedUrl, "https://example.test/v1/keys/validate");
     assert.deepEqual(JSON.parse(capturedBody), { key: "mg_pro_abc123" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCO-260 quick-win #1 — checkProAccess had no bounded timeout: a hung
+// Modelglass API response left it (and everything gated behind it in
+// run-task.ts) waiting indefinitely instead of reaching the network-error
+// fail-open path. Same hangingFetch convention as provider-execute.test.ts.
+// ---------------------------------------------------------------------------
+describe("checkProAccess — timeout (SCO-260 quick-win #1)", () => {
+  function hangingFetch(): typeof fetch {
+    return ((_url: string, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      });
+    }) as typeof fetch;
+  }
+
+  test("a hung request times out and reports reason network-error (fails open)", async () => {
+    const status = await checkProAccess("mg_test", hangingFetch(), "https://example.test", 20);
+    assert.equal(status.isPro, false);
+    assert.equal((status as Extract<ProGateStatus, { reason: "network-error" }>).reason, "network-error");
+    assert.match((status as Extract<ProGateStatus, { reason: "network-error" }>).message, /timed out/i);
+    assert.equal(isGateSatisfied(status), true); // network-error fails open, per this module's documented contract
+  });
+
+  test("defaults to DEFAULT_PRO_GATE_TIMEOUT_MS when no timeoutMs is passed", async () => {
+    const calls: RequestInit[] = [];
+    const fetchStub = (async (_url: string, init?: RequestInit) => {
+      calls.push(init!);
+      return jsonResponse(200, { ok: true, data: { valid: true, tier: "pro" } });
+    }) as typeof fetch;
+    await checkProAccess("mg_test", fetchStub, "https://example.test");
+    assert.ok(calls[0]!.signal instanceof AbortSignal);
+    assert.equal(DEFAULT_PRO_GATE_TIMEOUT_MS, 15_000);
   });
 });
 

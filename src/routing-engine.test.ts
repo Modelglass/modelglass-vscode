@@ -10,10 +10,12 @@
  * miss both.
  */
 
-import { describe, test } from "node:test";
+import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  DEFAULT_MODELGLASS_FETCH_TIMEOUT_MS,
+  fetchLLMModels,
   normaliseOfferings,
   rankAgenticMultiStep,
   rankAutocomplete,
@@ -29,6 +31,12 @@ import {
   type Offering,
   type RoutableModel,
 } from "./routing-engine.js";
+
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -457,5 +465,44 @@ describe("rankModelsForCategory", () => {
       assert.equal(returned, category);
       assert.equal(ranked.length, 1, `expected ${category} to rank the all-rounder model`);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCO-260 quick-win #1 — this was the one Modelglass API fetch in the Run
+// Task path with no bounded timeout (run-task-lib.ts's stale-cache fallback,
+// SCO-264, only fires on a *rejected* fetch — a *hung* one never reached it).
+// Same hangingFetch convention as provider-execute.test.ts: the stub mirrors
+// real fetch's AbortSignal behavior instead of just asserting a timeoutMs is
+// threaded through.
+// ---------------------------------------------------------------------------
+describe("fetchLLMModels — timeout (SCO-260 quick-win #1)", () => {
+  function hangingFetch(): typeof fetch {
+    return ((_url: string, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      });
+    }) as typeof fetch;
+  }
+
+  test("a hung request times out with a clear error instead of hanging forever", async () => {
+    globalThis.fetch = hangingFetch();
+    await assert.rejects(() => fetchLLMModels("mg_test", 20), /timed out after 20ms/i);
+  });
+
+  test("defaults to DEFAULT_MODELGLASS_FETCH_TIMEOUT_MS when no timeoutMs is passed", async () => {
+    const calls: RequestInit[] = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push(init);
+      return new Response(JSON.stringify({ ok: true, data: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    await fetchLLMModels("mg_test");
+    assert.ok(calls[0]!.signal instanceof AbortSignal);
+    assert.equal(DEFAULT_MODELGLASS_FETCH_TIMEOUT_MS, 15_000);
   });
 });
