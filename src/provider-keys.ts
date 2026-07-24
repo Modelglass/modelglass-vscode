@@ -13,7 +13,13 @@ import {
 import { checkProAccess, wouldExceedSingleKeyLimit, isGateSatisfied } from "./pro-gate-lib.js";
 import { promptUpgradeToPro } from "./pro-gate.js";
 import { fetchRoutableModels } from "./run-task-lib.js";
-import { previewProviderCapabilities, summarizeCapabilityPreview, formatCategoryLines } from "./capability-preview-lib.js";
+import {
+  previewProviderCapabilities,
+  summarizeCapabilityPreview,
+  previewCombinedCapabilities,
+  summarizeCombinedCapabilityPreview,
+  formatCategoryLines,
+} from "./capability-preview-lib.js";
 import type { RoutableModel } from "./routing-engine.js";
 
 /**
@@ -76,6 +82,39 @@ async function showCapabilityPreview(
       `Modelglass: ${PROVIDER_LABELS[provider]} is ${summarizeCapabilityPreview(preview)}. ` +
         "See the Modelglass output channel for the full breakdown.",
     );
+  }
+
+  // SCO-302 — combined fallback-chain coverage across every currently-
+  // configured provider, additive to the single-key preview above. Only
+  // meaningful once more than one provider is configured: the first-key-ever
+  // case has nothing to combine, so the single-key preview is already the
+  // whole picture and this step is skipped entirely rather than shown as a
+  // redundant duplicate of it.
+  const configured = await getConfiguredProviders(context.secrets);
+  if (configured.length > 1) {
+    const combined = previewCombinedCapabilities(allModels, configured.map((c) => c.provider));
+    const providerNames = configured.map((c) => PROVIDER_LABELS[c.provider]).join(", ");
+    output.appendLine(
+      `[provider-keys] combined fallback-chain coverage across ${configured.length} configured providers (${providerNames}):`,
+    );
+    for (const line of formatCategoryLines(combined)) {
+      output.appendLine(`  - ${line}`);
+    }
+
+    if (combined.routable.length === 0) {
+      vscode.window.showWarningMessage(
+        `Modelglass: even combined across all ${configured.length} configured providers, no task category has a ` +
+          "routable model right now — Run Task will never find a match until registry benchmark coverage improves. " +
+          "See the Modelglass output channel for the full breakdown.",
+      );
+    } else if (combined.zeroRoutable.length > 0) {
+      vscode.window.showInformationMessage(
+        `Modelglass: combined, ${summarizeCombinedCapabilityPreview(combined)}. ` +
+          "See the Modelglass output channel for the full breakdown.",
+      );
+    } else {
+      vscode.window.showInformationMessage(`Modelglass: combined, ${summarizeCombinedCapabilityPreview(combined)}.`);
+    }
   }
 }
 
