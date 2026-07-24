@@ -9,7 +9,13 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { previewProviderCapabilities, summarizeCapabilityPreview, formatCategoryLines } from "./capability-preview-lib.js";
+import {
+  previewProviderCapabilities,
+  summarizeCapabilityPreview,
+  previewCombinedCapabilities,
+  summarizeCombinedCapabilityPreview,
+  formatCategoryLines,
+} from "./capability-preview-lib.js";
 import type { RoutableModel } from "./routing-engine.js";
 
 function makeModel(overrides: Partial<RoutableModel> & { name: string; provider: string }): RoutableModel {
@@ -136,5 +142,106 @@ describe("formatCategoryLines", () => {
 
     const testGenLine = lines.find((l) => l.startsWith("Test generation:"))!;
     assert.equal(testGenLine, "Test generation: none routable");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCO-302 — combined fallback-chain coverage across every configured
+// provider, additive to SCO-263's single-key preview above.
+// ---------------------------------------------------------------------------
+
+describe("previewCombinedCapabilities", () => {
+  test("first key ever (a single configured provider): combined coverage is identical to that provider's own preview — nothing to combine yet", () => {
+    const model = makeModel({ name: "Groq Model", provider: "groq", benchmarks: [bench("swe-bench-pro", 0.6)] });
+    const single = previewProviderCapabilities([model], "groq");
+    const combined = previewCombinedCapabilities([model], ["groq"]);
+
+    assert.equal(combined.routable.length, single.routable.length);
+    assert.equal(combined.zeroRoutable.length, single.zeroRoutable.length);
+    // Caller-side gating (provider-keys.ts) skips showing this case at all —
+    // this test just confirms the computation itself has no surprise
+    // divergence from the single-key result if it WERE called.
+  });
+
+  test("second key fills a gap the first key alone had", () => {
+    // Groq alone: routable for bug-fix (SWE-bench Pro), nothing else.
+    // OpenAI alone: only test-gen routable (capability_profile.coding), not bug-fix.
+    // Combined: both bug-fix AND test-gen resolved, neither alone had both.
+    const groqModel = makeModel({ name: "Groq Model", provider: "groq", benchmarks: [bench("swe-bench-pro", 0.6)] });
+    const openaiModel = makeModel({
+      name: "OpenAI Model",
+      provider: "openai",
+      capability: new Map([["coding", "strong"]]),
+    });
+
+    const groqAlone = previewProviderCapabilities([groqModel, openaiModel], "groq");
+    assert.ok(groqAlone.zeroRoutable.some((c) => c.category === "test-gen"));
+
+    const combined = previewCombinedCapabilities([groqModel, openaiModel], ["groq", "openai"]);
+    const bugFix = combined.categories.find((c) => c.category === "bug-fix")!;
+    const testGen = combined.categories.find((c) => c.category === "test-gen")!;
+    assert.equal(bugFix.routableCount, 1); // groqModel
+    assert.equal(testGen.routableCount, 1); // openaiModel — a gap groqAlone had
+    assert.ok(!combined.zeroRoutable.some((c) => c.category === "test-gen"));
+  });
+
+  test("second key adds no improvement — the first key already covered everything the second one would", () => {
+    const strongOpenAi = makeModel({
+      name: "Strong OpenAI",
+      provider: "openai",
+      benchmarks: [bench("swe-bench-pro", 0.9)],
+      capability: new Map([["coding", "strong"]]),
+    });
+    const weakerGroq = makeModel({ name: "Weaker Groq", provider: "groq", benchmarks: [bench("swe-bench-pro", 0.3)] });
+
+    const openaiAlone = previewProviderCapabilities([strongOpenAi, weakerGroq], "openai");
+    const combined = previewCombinedCapabilities([strongOpenAi, weakerGroq], ["openai", "groq"]);
+
+    // Adding Groq doesn't shrink zeroRoutable further than OpenAI alone already achieved.
+    assert.equal(combined.zeroRoutable.length, openaiAlone.zeroRoutable.length);
+    const bugFix = combined.categories.find((c) => c.category === "bug-fix")!;
+    assert.equal(bugFix.routableCount, 2); // both still rank, just no NEW category unlocked
+  });
+
+  test("fully-zero-coverage combined case: neither configured provider has any scoring signal, still zero across the board", () => {
+    const bareGroq = makeModel({ name: "Bare Groq", provider: "groq" });
+    const bareMistral = makeModel({ name: "Bare Mistral", provider: "mistral" });
+
+    const combined = previewCombinedCapabilities([bareGroq, bareMistral], ["groq", "mistral"]);
+
+    assert.equal(combined.routable.length, 0);
+    assert.equal(combined.zeroRoutable.length, combined.categories.length);
+  });
+});
+
+describe("summarizeCombinedCapabilityPreview", () => {
+  test("full combined coverage reads as resolved, not a warning", () => {
+    const fullyCovered = makeModel({
+      name: "Covers Everything",
+      provider: "openai",
+      benchmarks: [
+        bench("swe-bench-pro", 0.9),
+        bench("aider-polyglot", 0.8),
+        bench("terminal-bench-2-1", 0.7),
+        bench("bigcodebench", 0.6),
+      ],
+      capability: new Map([
+        ["coding", "strong"],
+        ["instruction-following", "strong"],
+        ["speed", "strong"],
+      ]),
+    });
+    fullyCovered.benchmarks[2] = { ...fullyCovered.benchmarks[2]!, harness: "terminus-2" };
+
+    const combined = previewCombinedCapabilities([fullyCovered], ["openai"]);
+    assert.match(summarizeCombinedCapabilityPreview(combined), /routable for all \d+ task categories/);
+  });
+
+  test("partial combined coverage names the still-uncovered categories", () => {
+    const groqModel = makeModel({ name: "Groq Model", provider: "groq", benchmarks: [bench("swe-bench-pro", 0.6)] });
+    const combined = previewCombinedCapabilities([groqModel], ["groq"]);
+    const summary = summarizeCombinedCapabilityPreview(combined);
+    assert.match(summary, /of \d+ task categories/);
+    assert.match(summary, /still no routable models for/i);
   });
 });
