@@ -229,6 +229,91 @@ describe("rankBugFix", () => {
 });
 
 // ---------------------------------------------------------------------------
+// SCO-330 — minScore quality bar (from SCO-329's honest gap review, §2b)
+// ---------------------------------------------------------------------------
+
+describe("rankBugFix minScore", () => {
+  test("reproduces, then fixes, SCO-329's exact live example: GPT-5.6 Sol (96.2%, $5/M) vs o4-mini (68%, $1.1/M)", () => {
+    const gpt56Sol = makeModel({ name: "GPT-5.6 Sol", benchmarks: [bench("swe-bench-verified", 0.962)], inputPricePerM: 5 });
+    const o4Mini = makeModel({ name: "o4-mini", benchmarks: [bench("swe-bench-verified", 0.68)], inputPricePerM: 1.1 });
+
+    // Without a threshold: reproduces the bug exactly as SCO-329 found it —
+    // best-score-first picks the $5/M model over the $1.1/M one.
+    const noThreshold = rankBugFix([o4Mini, gpt56Sol]);
+    assert.equal(noThreshold.ranked[0]!.model.name, "GPT-5.6 Sol");
+
+    // With a 65% bar: both qualify (68% and 96.2% both clear it) — cheapest
+    // of the qualifiers wins, which is o4-mini, not the priciest passer.
+    const withThreshold = rankBugFix([o4Mini, gpt56Sol], 0.65);
+    assert.equal(withThreshold.ranked[0]!.model.name, "o4-mini");
+    assert.equal(withThreshold.excluded.length, 0);
+  });
+
+  test("a model below the threshold is excluded with a reason, not silently dropped or ranked", () => {
+    const strong = makeModel({ name: "Strong", benchmarks: [bench("swe-bench-pro", 0.7)], inputPricePerM: 10 });
+    const belowBar = makeModel({ name: "BelowBar", benchmarks: [bench("swe-bench-pro", 0.4)], inputPricePerM: 1 });
+
+    const { ranked, excluded } = rankBugFix([strong, belowBar], 0.5);
+
+    assert.deepEqual(ranked.map((r) => r.model.name), ["Strong"]);
+    assert.equal(excluded.length, 1);
+    assert.equal(excluded[0]!.model.name, "BelowBar");
+    assert.match(excluded[0]!.reason, /below the minScore quality bar/);
+  });
+
+  test("no qualifying model at all yields an empty ranked list, all moved to excluded", () => {
+    const a = makeModel({ name: "A", benchmarks: [bench("swe-bench-pro", 0.3)] });
+    const b = makeModel({ name: "B", benchmarks: [bench("swe-bench-pro", 0.2)] });
+
+    const { ranked, excluded } = rankBugFix([a, b], 0.9);
+
+    assert.equal(ranked.length, 0);
+    assert.equal(excluded.length, 2);
+  });
+
+  test("an unscored model (no benchmark at all) stays unscored, not excluded, when a threshold is set", () => {
+    const noScore = makeModel({ name: "NoScore" });
+    const qualifies = makeModel({ name: "Qualifies", benchmarks: [bench("swe-bench-pro", 0.8)] });
+
+    const { ranked, excluded, unscored } = rankBugFix([noScore, qualifies], 0.5);
+
+    assert.deepEqual(ranked.map((r) => r.model.name), ["Qualifies"]);
+    assert.equal(excluded.length, 0);
+    assert.equal(unscored.length, 1);
+    assert.equal(unscored[0]!.name, "NoScore");
+  });
+
+  test("among multiple qualifiers, sorts cheapest-first regardless of how much each clears the bar by", () => {
+    const barelyQualifies = makeModel({ name: "Barely", benchmarks: [bench("swe-bench-pro", 0.51)], inputPricePerM: 1 });
+    const comfortablyQualifies = makeModel({ name: "Comfortable", benchmarks: [bench("swe-bench-pro", 0.95)], inputPricePerM: 8 });
+
+    const { ranked } = rankBugFix([comfortablyQualifies, barelyQualifies], 0.5);
+
+    assert.deepEqual(ranked.map((r) => r.model.name), ["Barely", "Comfortable"]);
+  });
+});
+
+describe("rankTerminalCli minScore", () => {
+  test("composes with the harness-comparability exclusion — a native-harness score stays excluded for its own reason, unaffected by the bar", () => {
+    const terminus2Weak = makeModel({
+      name: "Terminus2Weak",
+      benchmarks: [bench("terminal-bench-2-1", 0.3, { harness: "terminus-2" })],
+    });
+    const nativeHarness = makeModel({
+      name: "NativeHarness",
+      benchmarks: [bench("terminal-bench-2-1", 0.9, { harness: "native" })],
+    });
+
+    const { ranked, excluded } = rankTerminalCli([terminus2Weak, nativeHarness], 0.5);
+
+    assert.equal(ranked.length, 0);
+    assert.equal(excluded.length, 2);
+    assert.ok(excluded.some((e) => e.model.name === "NativeHarness" && e.reason.includes("not comparable")));
+    assert.ok(excluded.some((e) => e.model.name === "Terminus2Weak" && e.reason.includes("minScore")));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 3.2 New code generation — clean mapping (Aider preferred, LCB fallback)
 // ---------------------------------------------------------------------------
 

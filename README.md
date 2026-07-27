@@ -53,10 +53,15 @@ you supply.
    same provider twice), up to one attempt per configured provider. Pro
    also unlocks an optional `.modelglass/routing-rules.json` file in your
    workspace to override the default ranking per category — exclude a
-   provider, force cheapest-first, or set an exact model priority order. A
-   Starter user with a `routing-rules.json` present, or attempting to
-   configure more than one provider key, gets a clear upgrade prompt rather
-   than a silent failure.
+   provider, force cheapest-first, set an exact model priority order, or set
+   a `minScore` (0–1) quality bar so the category ranks *cheapest among
+   models that clear the bar*, instead of the highest-scoring model
+   regardless of price. `minScore` only applies to the five benchmark-scored
+   categories (bug fix, new code generation, terminal/CLI, library-aware
+   feature work, refactor); it's a no-op for the four categories that fall
+   back to a qualitative capability rating. A Starter user with a
+   `routing-rules.json` present, or attempting to configure more than one
+   provider key, gets a clear upgrade prompt rather than a silent failure.
 
 ## Install
 

@@ -28,16 +28,37 @@ import {
  * than a bare file at the workspace root, so it doesn't clutter the root
  * and reads clearly as "config belonging to the Modelglass extension."
  *
- * RULE GRAMMAR — one rule per LeafTaskCategory (duplicates rejected), three
- * independently-composable fields covering the card's three example shapes:
+ * RULE GRAMMAR — one rule per LeafTaskCategory (duplicates rejected), four
+ * independently-composable fields covering the card's three example shapes
+ * plus SCO-330's quality bar:
  *   - excludeProviders: string[]   -- "never route agentic tasks to provider X"
  *   - strategy: "cheapest"          -- "always prefer cheapest for autocomplete"
  *   - priority: string[]            -- "custom priority ordering per category"
  *     (an ordered list of Modelglass model.id strings, most-preferred first)
+ *   - minScore: number (0-1)        -- SCO-330: "cheapest model that still
+ *     clears this quality bar" — see routing-engine.ts's partitionByMinScore
+ *     for the ranking-side mechanics. Only meaningful for the five
+ *     benchmark-scored categories (bug-fix, new-code-generation, terminal-cli,
+ *     library-aware-feature-work, refactor); silently a no-op for the four
+ *     capability-rating categories, per routing-engine.ts's own dispatcher
+ *     comment — their 0-2 rating scale isn't threshold-comparable to a 0-1
+ *     score.
  * `priority` and `strategy` are mutually exclusive within one rule (both are
  * full-ranking overrides; combining them is ambiguous, rejected at
- * validation rather than silently resolved by a precedence guess).
- * `excludeProviders` composes with either, or with neither (see
+ * validation rather than silently resolved by a precedence guess). `minScore`
+ * is ALSO rejected together with either: `priority` already fully specifies
+ * exactly which models rank at all (a quality floor on top of an explicit
+ * list is redundant — just leave sub-bar models off the list), and
+ * `strategy: "cheapest"` already means "ignore quality signal entirely,"
+ * which a quality floor directly contradicts. This is a deliberate scope
+ * narrowing (flagged, not silently chosen) — `minScore` composing with
+ * `strategy: "cheapest"` (cheapest-among-qualifying via the rule engine
+ * rather than the default engine) is a plausible future shape, but doing it
+ * correctly means resolveCategoryRanking's strategy branch would need each
+ * model's per-category benchmark score, which today only the specific
+ * rankXxx functions in routing-engine.ts know how to compute — left for a
+ * follow-up rather than threaded through here.
+ * `excludeProviders` composes with any of the other three, or with none (see
  * resolveCategoryRanking's header for the exact precedence).
  *
  * SCOPE DECISION FLAGGED AS GENUINELY AMBIGUOUS (per the card's own
@@ -67,6 +88,9 @@ export interface RoutingRule {
   excludeProviders?: string[];
   strategy?: RuleStrategy;
   priority?: string[];
+  /** SCO-330 — 0-1, same scale as a raw benchmark score. See this file's
+   *  header for why it's rejected alongside `priority`/`strategy`. */
+  minScore?: number;
 }
 
 export interface RoutingRulesConfig {
@@ -164,11 +188,27 @@ export function validateRoutingRulesConfig(raw: unknown): ValidationResult {
       return;
     }
 
+    if (r["minScore"] !== undefined) {
+      if (typeof r["minScore"] !== "number" || Number.isNaN(r["minScore"]) || r["minScore"] < 0 || r["minScore"] > 1) {
+        errors.push(`rules[${i}].minScore must be a number between 0 and 1 (a fraction, e.g. 0.65 for 65%)`);
+        return;
+      }
+      if (r["priority"] !== undefined) {
+        errors.push(`rules[${i}]: "minScore" and "priority" are mutually exclusive — an explicit model list already decides which models rank`);
+        return;
+      }
+      if (r["strategy"] !== undefined) {
+        errors.push(`rules[${i}]: "minScore" and "strategy" are mutually exclusive — "cheapest" already ignores quality signal entirely`);
+        return;
+      }
+    }
+
     rulesByCategory.set(category, {
       category,
       excludeProviders: r["excludeProviders"] as string[] | undefined,
       strategy: r["strategy"] as RuleStrategy | undefined,
       priority: r["priority"] as string[] | undefined,
+      minScore: r["minScore"] as number | undefined,
     });
   });
 
@@ -289,14 +329,16 @@ export function resolveCategoryRanking(
     };
   }
 
-  // exclude-only rule (or excludeProviders was empty) — compose with the
-  // default engine on the filtered pool, per the card's explicit
-  // "don't fully replace the default" requirement.
-  const defaultRanking = rankModelsForCategory(pool, category);
+  // exclude-only and/or minScore rule (or excludeProviders was empty and no
+  // minScore set — the true no-op case) — compose with the default engine
+  // on the filtered pool, per the card's explicit "don't fully replace the
+  // default" requirement. SCO-330: minScore forwarded here, not in the
+  // priority/strategy branches above — see this file's header for why.
+  const defaultRanking = rankModelsForCategory(pool, category, rule.minScore);
   return {
     ...defaultRanking,
     excluded: [...excludedByRule, ...defaultRanking.excluded],
-    ruleApplied: excludeSet.size > 0,
+    ruleApplied: excludeSet.size > 0 || rule.minScore !== undefined,
     unmatchedPriorityIds: [],
   };
 }
