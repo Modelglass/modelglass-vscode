@@ -83,6 +83,43 @@ describe("validateRoutingRulesConfig", () => {
     const result = validateRoutingRulesConfig({ version: 1, rules: [{ category: "bug-fix", strategy: "fastest" }] });
     assert.equal(result.ok, false);
   });
+
+  // SCO-330 — minScore quality bar
+  test("accepts a well-formed minScore rule", () => {
+    const result = validateRoutingRulesConfig({ version: 1, rules: [{ category: "bug-fix", minScore: 0.65 }] });
+    assert.equal(result.ok, true);
+    assert.ok(result.ok && result.rulesByCategory.get("bug-fix")?.minScore === 0.65);
+  });
+
+  test("rejects a minScore outside 0-1", () => {
+    const tooHigh = validateRoutingRulesConfig({ version: 1, rules: [{ category: "bug-fix", minScore: 1.5 }] });
+    assert.equal(tooHigh.ok, false);
+    const negative = validateRoutingRulesConfig({ version: 1, rules: [{ category: "bug-fix", minScore: -0.1 }] });
+    assert.equal(negative.ok, false);
+  });
+
+  test("rejects a non-numeric minScore", () => {
+    const result = validateRoutingRulesConfig({ version: 1, rules: [{ category: "bug-fix", minScore: "0.65" }] });
+    assert.equal(result.ok, false);
+  });
+
+  test("rejects minScore combined with priority", () => {
+    const result = validateRoutingRulesConfig({
+      version: 1,
+      rules: [{ category: "bug-fix", minScore: 0.65, priority: ["test/a"] }],
+    });
+    assert.equal(result.ok, false);
+    assert.ok(!result.ok && result.errors.some((e) => e.includes("mutually exclusive")));
+  });
+
+  test("rejects minScore combined with strategy", () => {
+    const result = validateRoutingRulesConfig({
+      version: 1,
+      rules: [{ category: "bug-fix", minScore: 0.65, strategy: "cheapest" }],
+    });
+    assert.equal(result.ok, false);
+    assert.ok(!result.ok && result.errors.some((e) => e.includes("mutually exclusive")));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -198,6 +235,49 @@ describe("resolveCategoryRanking", () => {
 
     assert.deepEqual(result.ranked.map((r) => r.model.name), ["OnlyModel"]);
     assert.deepEqual(result.unmatchedPriorityIds, ["test/does-not-exist"]);
+  });
+
+  // SCO-330 — minScore composes with the default engine (and with
+  // excludeProviders), reproducing SCO-329's exact live finding via the
+  // rules-file path rather than calling rankBugFix directly.
+  test("minScore flips the default engine from best-first to cheapest-among-qualifying for its category", () => {
+    const gpt56Sol = makeModel({ name: "GPT-5.6 Sol", benchmarks: [bench("swe-bench-verified", 0.962)], inputPricePerM: 5 });
+    const o4Mini = makeModel({ name: "o4-mini", benchmarks: [bench("swe-bench-verified", 0.68)], inputPricePerM: 1.1 });
+
+    const rule: RoutingRule = { category: "bug-fix", minScore: 0.65 };
+    const result = resolveCategoryRanking([gpt56Sol, o4Mini], "bug-fix", rule);
+
+    assert.equal(result.ruleApplied, true);
+    assert.equal(result.ranked[0]!.model.name, "o4-mini");
+  });
+
+  test("minScore composes with excludeProviders (both filter the pool before the default engine ranks it)", () => {
+    const bannedCheap = makeModel({
+      name: "BannedCheap",
+      provider: "banned-provider",
+      benchmarks: [bench("swe-bench-pro", 0.7)],
+      inputPricePerM: 1,
+    });
+    const allowedExpensive = makeModel({
+      name: "AllowedExpensive",
+      provider: "ok-provider",
+      benchmarks: [bench("swe-bench-pro", 0.9)],
+      inputPricePerM: 10,
+    });
+    const allowedBelowBar = makeModel({
+      name: "AllowedBelowBar",
+      provider: "ok-provider",
+      benchmarks: [bench("swe-bench-pro", 0.3)],
+      inputPricePerM: 1,
+    });
+
+    const rule: RoutingRule = { category: "bug-fix", excludeProviders: ["banned-provider"], minScore: 0.5 };
+    const result = resolveCategoryRanking([bannedCheap, allowedExpensive, allowedBelowBar], "bug-fix", rule);
+
+    assert.equal(result.ruleApplied, true);
+    assert.deepEqual(result.ranked.map((r) => r.model.name), ["AllowedExpensive"]);
+    assert.ok(result.excluded.some((e) => e.model.name === "BannedCheap" && e.reason.includes("excludeProviders")));
+    assert.ok(result.excluded.some((e) => e.model.name === "AllowedBelowBar" && e.reason.includes("minScore")));
   });
 
   test("excludeProviders composes with priority — an excluded provider's model is never eligible even if named in priority", () => {

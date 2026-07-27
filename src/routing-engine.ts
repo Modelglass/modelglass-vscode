@@ -283,17 +283,56 @@ const cheaperFirst = (a: RoutableModel, b: RoutableModel) =>
   (a.inputPricePerM ?? Infinity) - (b.inputPricePerM ?? Infinity);
 
 /**
+ * SCO-330 (from SCO-329's honest gap review, §2b) — the missing quality bar.
+ * Without a `minScore`, this file ranked score-descending with price only a
+ * tie-break, so "Run Task on Cheapest Capable Model" could pick a 96.2%
+ * $5/M model over a 68% $1.1/M one — cheaper-and-still-capable never got a
+ * look-in once anything scored higher. `minScore` (0-1, same scale as a raw
+ * benchmark score) flips the sort for models that clear it: cheapest-first
+ * among qualifiers, not best-first among everyone. Below-threshold models
+ * move to `excluded` with a stated reason — dropped, never silently ranked
+ * low, matching this file's existing "every exclusion carries a reason"
+ * convention (see the terminal-cli harness exclusion below).
+ *
+ * Undefined `minScore` (the common case — no rule set one) leaves the
+ * original score-descending behavior completely untouched; this is an
+ * additive filter+resort, not a replacement of the default engine.
+ */
+function partitionByMinScore(
+  ranked: RankedModel[],
+  minScore: number | undefined,
+): { qualifying: RankedModel[]; subThreshold: { model: RoutableModel; reason: string }[] } {
+  if (minScore === undefined) return { qualifying: ranked, subThreshold: [] };
+  const qualifying: RankedModel[] = [];
+  const subThreshold: { model: RoutableModel; reason: string }[] = [];
+  for (const r of ranked) {
+    if (r.score >= minScore) {
+      qualifying.push(r);
+    } else {
+      subThreshold.push({
+        model: r.model,
+        reason: `below the minScore quality bar (${r.scoreLabel} < required ${(minScore * 100).toFixed(0)}%)`,
+      });
+    }
+  }
+  return { qualifying, subThreshold };
+}
+
+/**
  * Shared shape for every "rank by a benchmark score, cheapest-first
  * tie-break" category (bug-fix, new-code-generation, library-aware feature
  * work). `pickScore` returns the score + label to use for one model, or
  * null if this model has no usable signal for this benchmark preference —
  * callers supply the specific benchmark id(s)/variant preference; this
  * function only owns the shared sort/exclude/unscore mechanics.
+ *
+ * `minScore` (SCO-330) — see partitionByMinScore's header above.
  */
 function rankByBenchmark(
   category: TaskCategory,
   models: RoutableModel[],
   pickScore: (m: RoutableModel) => { score: number; label: string } | null,
+  minScore?: number,
 ): CategoryRanking {
   const ranked: RankedModel[] = [];
   const unscored: RoutableModel[] = [];
@@ -305,11 +344,18 @@ function rankByBenchmark(
     }
     ranked.push({ model: m, score: picked.score, scoreKind: "benchmark", scoreLabel: picked.label });
   }
-  ranked.sort((a, b) => {
-    const d = b.score - a.score;
-    return d !== 0 ? d : cheaperFirst(a.model, b.model);
-  });
-  return { category, ranked, excluded: [], unscored };
+
+  if (minScore === undefined) {
+    ranked.sort((a, b) => {
+      const d = b.score - a.score;
+      return d !== 0 ? d : cheaperFirst(a.model, b.model);
+    });
+    return { category, ranked, excluded: [], unscored };
+  }
+
+  const { qualifying, subThreshold } = partitionByMinScore(ranked, minScore);
+  qualifying.sort((a, b) => cheaperFirst(a.model, b.model));
+  return { category, ranked: qualifying, excluded: subThreshold, unscored };
 }
 
 // --- 3.1 Bug-fix / debug ---------------------------------------------------
@@ -318,7 +364,7 @@ function rankByBenchmark(
 // swe-bench-pro.yaml's own notes), falling back to SWE-bench Verified when
 // a model has no Pro score. Cheapest-input-price tie-break, matching
 // ./lib.ts's selectCodingModel() convention.
-export function rankBugFix(models: RoutableModel[]): CategoryRanking {
+export function rankBugFix(models: RoutableModel[], minScore?: number): CategoryRanking {
   return rankByBenchmark("bug-fix", models, (m) => {
     const pro = benchmarkScore(m, "swe-bench-pro");
     if (pro) return { score: pro.score, label: `SWE-bench Pro ${(pro.score * 100).toFixed(1)}%` };
@@ -327,7 +373,7 @@ export function rankBugFix(models: RoutableModel[]): CategoryRanking {
       return { score: verified.score, label: `SWE-bench Verified ${(verified.score * 100).toFixed(1)}% (no Pro score available)` };
     }
     return null;
-  });
+  }, minScore);
 }
 
 // --- 3.2 New code generation (spec -> code, greenfield) -------------------
@@ -335,14 +381,14 @@ export function rankBugFix(models: RoutableModel[]): CategoryRanking {
 // code across a broad language set), falling back to LiveCodeBench (skews
 // algorithmic/competitive-programming — the taxonomy's stated reason to
 // prefer Aider when both exist).
-export function rankNewCodeGeneration(models: RoutableModel[]): CategoryRanking {
+export function rankNewCodeGeneration(models: RoutableModel[], minScore?: number): CategoryRanking {
   return rankByBenchmark("new-code-generation", models, (m) => {
     const aider = benchmarkScore(m, "aider-polyglot");
     if (aider) return { score: aider.score, label: `Aider Polyglot ${(aider.score * 100).toFixed(1)}%` };
     const lcb = benchmarkScore(m, "livecodebench");
     if (lcb) return { score: lcb.score, label: `LiveCodeBench ${(lcb.score * 100).toFixed(1)}% (no Aider Polyglot score available)` };
     return null;
-  });
+  }, minScore);
 }
 
 // --- 3.3 Terminal / CLI / DevOps -------------------------------------------
@@ -353,7 +399,7 @@ export function rankNewCodeGeneration(models: RoutableModel[]): CategoryRanking 
 // rather than silently mixed into a ranking it would distort. This is a
 // default-rules scoring decision (which harness to trust), not a user
 // override — still in SCO-230's scope.
-export function rankTerminalCli(models: RoutableModel[]): CategoryRanking {
+export function rankTerminalCli(models: RoutableModel[], minScore?: number): CategoryRanking {
   const ranked: RankedModel[] = [];
   const excluded: { model: RoutableModel; reason: string }[] = [];
   const unscored: RoutableModel[] = [];
@@ -379,11 +425,21 @@ export function rankTerminalCli(models: RoutableModel[]): CategoryRanking {
       });
     }
   }
-  ranked.sort((a, b) => {
-    const d = b.score - a.score;
-    return d !== 0 ? d : cheaperFirst(a.model, b.model);
-  });
-  return { category: "terminal-cli", ranked, excluded, unscored };
+
+  if (minScore === undefined) {
+    ranked.sort((a, b) => {
+      const d = b.score - a.score;
+      return d !== 0 ? d : cheaperFirst(a.model, b.model);
+    });
+    return { category: "terminal-cli", ranked, excluded, unscored };
+  }
+
+  // SCO-330: same minScore filter+resort as rankByBenchmark, reimplemented
+  // here (not routed through that function) because this category's
+  // harness-exclusion pass above already needs its own bespoke loop.
+  const { qualifying, subThreshold } = partitionByMinScore(ranked, minScore);
+  qualifying.sort((a, b) => cheaperFirst(a.model, b.model));
+  return { category: "terminal-cli", ranked: qualifying, excluded: [...excluded, ...subThreshold], unscored };
 }
 
 // --- 3.4 Library/dependency-aware feature work -----------------------------
@@ -392,14 +448,14 @@ export function rankTerminalCli(models: RoutableModel[]): CategoryRanking {
 // vertical's existing set): BigCodeBench, Hard variant preferred (Full is
 // approaching saturation for frontier models per bigcodebench.yaml's own
 // notes), falling back to Full if Hard is absent for a model.
-export function rankLibraryAwareFeatureWork(models: RoutableModel[]): CategoryRanking {
+export function rankLibraryAwareFeatureWork(models: RoutableModel[], minScore?: number): CategoryRanking {
   return rankByBenchmark("library-aware-feature-work", models, (m) => {
     const hard = benchmarkScore(m, "bigcodebench", "hard");
     if (hard?.variant === "hard") return { score: hard.score, label: `BigCodeBench Hard ${(hard.score * 100).toFixed(1)}%` };
     const any = benchmarkScore(m, "bigcodebench");
     if (any) return { score: any.score, label: `BigCodeBench ${any.variant ?? "?"} ${(any.score * 100).toFixed(1)}% (no Hard-variant score available)` };
     return null;
-  });
+  }, minScore);
 }
 
 // --- Shared fallback: rank by a capability_profile dimension --------------
@@ -447,14 +503,18 @@ function rankByCapability(
 // NO SWE-bench score at all fall further back to capability_profile.coding
 // rather than being excluded outright, ranked below every benchmark-scored
 // model. Cheapest-price tie-break throughout.
-export function rankRefactor(models: RoutableModel[]): CategoryRanking {
+export function rankRefactor(models: RoutableModel[], minScore?: number): CategoryRanking {
+  // SCO-330: minScore applies only to the benchmark-scored half below —
+  // the capability_profile.coding fallback is a 0-2 rating scale, not
+  // comparable to a 0-1 minScore threshold, same reasoning as excluding
+  // test-gen/doc-gen/chat-explain/autocomplete from this fix entirely.
   const benchmarkRanking = rankByBenchmark("refactor", models, (m) => {
     const pro = benchmarkScore(m, "swe-bench-pro");
     if (pro) return { score: pro.score, label: `SWE-bench Pro ${(pro.score * 100).toFixed(1)}% (imperfect proxy — measures bug-fix, not refactor)` };
     const verified = benchmarkScore(m, "swe-bench-verified");
     if (verified) return { score: verified.score, label: `SWE-bench Verified ${(verified.score * 100).toFixed(1)}% (imperfect proxy — measures bug-fix, not refactor)` };
     return null;
-  });
+  }, minScore);
   const capabilityRanking = rankByCapability("refactor", benchmarkRanking.unscored, "coding");
   return {
     category: "refactor",
@@ -464,7 +524,9 @@ export function rankRefactor(models: RoutableModel[]): CategoryRanking {
     // are not on a shared axis, so sorting them together would compare
     // incommensurable numbers.
     ranked: [...benchmarkRanking.ranked, ...capabilityRanking.ranked],
-    excluded: [],
+    // SCO-330: benchmarkRanking.excluded now carries below-minScore models
+    // when a threshold is set (empty otherwise, matching prior behavior).
+    excluded: benchmarkRanking.excluded,
     unscored: capabilityRanking.unscored,
   };
 }
@@ -574,14 +636,23 @@ export type TaskCategory =
  * (see rankAgenticMultiStep above) — calling this with that category is a
  * caller error, not a silent empty ranking, since it would otherwise look
  * like "no model qualifies" rather than "wrong function for this category."
+ *
+ * `minScore` (SCO-330) is forwarded only to the five benchmark-scored
+ * categories — silently ignored for test-gen/doc-gen/chat-explain/
+ * autocomplete, whose capability_profile rating scale (0-2) a 0-1 score
+ * threshold can't meaningfully apply to. See partitionByMinScore's header.
  */
-export function rankModelsForCategory(models: RoutableModel[], category: LeafTaskCategory): CategoryRanking {
+export function rankModelsForCategory(
+  models: RoutableModel[],
+  category: LeafTaskCategory,
+  minScore?: number,
+): CategoryRanking {
   switch (category) {
-    case "bug-fix": return rankBugFix(models);
-    case "new-code-generation": return rankNewCodeGeneration(models);
-    case "terminal-cli": return rankTerminalCli(models);
-    case "library-aware-feature-work": return rankLibraryAwareFeatureWork(models);
-    case "refactor": return rankRefactor(models);
+    case "bug-fix": return rankBugFix(models, minScore);
+    case "new-code-generation": return rankNewCodeGeneration(models, minScore);
+    case "terminal-cli": return rankTerminalCli(models, minScore);
+    case "library-aware-feature-work": return rankLibraryAwareFeatureWork(models, minScore);
+    case "refactor": return rankRefactor(models, minScore);
     case "test-gen": return rankTestGen(models);
     case "doc-gen": return rankDocGen(models);
     case "chat-explain": return rankChatExplain(models);
