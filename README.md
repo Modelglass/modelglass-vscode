@@ -32,7 +32,12 @@ you supply.
 2. Run **Modelglass: Run Task on Cheapest Capable Model**, pick one of nine
    task categories (bug fix/debug, new code generation, terminal/CLI/DevOps,
    library-aware feature work, refactor, test generation, documentation
-   generation, chat/explain, autocomplete), and describe the task.
+   generation, chat/explain, autocomplete), and describe the task. If you
+   have an editor open, your current selection (or the whole file, if
+   nothing's selected) is automatically attached as context — the model
+   sees the code you're actually working on, not just your description of
+   it. No open editor: the task runs on your typed description alone,
+   exactly as before.
 3. The extension ranks your configured provider's models against
    Modelglass's live benchmark/capability feed (SWE-bench Pro/Verified,
    Terminal-Bench 2.1, Aider Polyglot/LiveCodeBench, or BigCodeBench,

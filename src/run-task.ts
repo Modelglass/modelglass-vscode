@@ -6,9 +6,12 @@ import { getConfiguredProviders } from "./provider-keys-lib.js";
 import {
   CATEGORY_LABELS,
   LEAF_CATEGORIES,
+  buildTaskPrompt,
+  capSnippet,
   describeAttempt,
   fetchRoutableModels,
   routeAndExecuteWithFallback,
+  type EditorContext,
 } from "./run-task-lib.js";
 import { loadRoutingRules } from "./routing-rules.js";
 import { checkProAccess, isGateSatisfied, proGatedValue, selectProvidersForRun } from "./pro-gate-lib.js";
@@ -36,6 +39,34 @@ import { promptUpgradeToPro } from "./pro-gate.js";
  * decides WHAT to pass into them.
  */
 
+/**
+ * SCO-330 (fix #3) — reads the active editor, if any, at the moment Run Task
+ * is invoked. Prefers the current selection; falls back to the whole
+ * document (size-capped via capSnippet) when nothing is selected. Returns
+ * undefined with no active editor at all (e.g. an empty workspace, or a
+ * non-text editor like an image preview) -- runTask() below already treats
+ * that identically to today's behavior via buildTaskPrompt's own no-op path.
+ * vscode-coupled by necessity (activeTextEditor, asRelativePath); the actual
+ * prompt-formatting logic this feeds is pure and tested (run-task-lib.ts).
+ */
+function captureEditorContext(): EditorContext | undefined {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) return undefined;
+
+  const { document, selection } = editor;
+  const selectedText = document.getText(selection);
+  const isSelection = selectedText.trim().length > 0;
+  const { snippet, truncated } = capSnippet(isSelection ? selectedText : document.getText());
+
+  return {
+    relativePath: vscode.workspace.asRelativePath(document.uri),
+    languageId: document.languageId,
+    isSelection,
+    snippet,
+    truncated,
+  };
+}
+
 async function promptForCategory(): Promise<LeafTaskCategory | undefined> {
   const picked = await vscode.window.showQuickPick(
     LEAF_CATEGORIES.map((category) => ({ label: CATEGORY_LABELS[category], category })),
@@ -55,6 +86,14 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
     return;
   }
 
+  // SCO-330 (fix #3) — captured BEFORE the category/prompt QuickPick and
+  // InputBox appear, not after: `vscode.window.activeTextEditor` reflects
+  // the editor active at the moment the command was invoked either way
+  // (VS Code's own quick-input overlays don't steal editor-active status),
+  // but capturing early is the more obviously-correct reading of "the file
+  // the user was looking at when they ran this command."
+  const editorContext = captureEditorContext();
+
   const category = await promptForCategory();
   if (!category) return;
 
@@ -66,6 +105,8 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
     validateInput: (value) => (value.trim() ? undefined : "Task description can't be empty"),
   });
   if (!prompt) return;
+
+  const taskPrompt = buildTaskPrompt(prompt.trim(), editorContext);
 
   const modelglassApiKey = await ensureApiKey(context);
   if (!modelglassApiKey) return; // free Modelglass key is for reading pricing/benchmark data, distinct from the provider key(s) above
@@ -112,7 +153,7 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
         allModels,
         providersForThisRun,
         category,
-        prompt.trim(),
+        taskPrompt,
         undefined,
         rule,
         // ADR-0012 Amendment 1 (SCO-281): the same-provider model-not-found
