@@ -100,6 +100,35 @@ export function buildTaskPrompt(userPrompt: string, context: EditorContext | und
   );
 }
 
+/**
+ * SCO-330 (fix #4) — was: `output.appendLine(result.execution.text);
+ * output.show(true);`. A full response landing all at once in the Output
+ * panel, per SCO-329, "is the single most 'unfinished' thing on camera" —
+ * there's nothing to *do* with the result except read it and copy it out
+ * manually. This builds the markdown document opened in an editor tab
+ * instead (the vscode.workspace.openTextDocument/showTextDocument calls
+ * live in run-task.ts, same lib/non-lib split as this file's other exports)
+ * — a small header so the doc is self-contained (which model, which
+ * category) without needing the Output channel open at all, since getting
+ * the answer OUT of a channel the user has to remember to open is the
+ * whole point of this fix.
+ *
+ * Deliberately still non-streaming in this pass — see this file's PR
+ * description / SCO-330's own scoping notes for why real token-by-token
+ * streaming across all 7 provider adapters is a separate, larger follow-up
+ * rather than bundled into this change.
+ */
+export function buildResultDocument(
+  categoryLabel: string,
+  modelName: string,
+  execution: { text: string; truncated?: boolean },
+): string {
+  const truncationNote = execution.truncated
+    ? "\n\n> ⚠️ **Response may be incomplete** — the provider reports it was cut off at the model's max output token limit.\n"
+    : "";
+  return `# Modelglass: ${categoryLabel} — ${modelName}${truncationNote}\n\n${execution.text}`;
+}
+
 export const CATEGORY_LABELS: Record<LeafTaskCategory, string> = {
   "bug-fix": "Bug fix / debug",
   "new-code-generation": "New code generation (spec → code)",

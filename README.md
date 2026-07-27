@@ -47,7 +47,10 @@ you supply.
    xAI, Mistral, Groq, Together AI, and OpenRouter. That feed is cached
    locally for ~5 minutes, so a brief Modelglass API blip doesn't block a
    Run Task call — a fetch failure past that window falls back to the last
-   known-good feed instead of failing the run.
+   known-good feed instead of failing the run. The response opens in its
+   own editor tab beside your code (not the Output channel) — labeled with
+   the category and model that produced it, and flagged if the provider
+   reports the response was cut off at its max output token limit.
 4. **Starter** (one configured key): one execution attempt. A failure
    (invalid key, rate limit, network/provider error, or a request that
    times out after 60s with no response) is reported clearly — no

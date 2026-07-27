@@ -6,6 +6,7 @@ import { getConfiguredProviders } from "./provider-keys-lib.js";
 import {
   CATEGORY_LABELS,
   LEAF_CATEGORIES,
+  buildResultDocument,
   buildTaskPrompt,
   capSnippet,
   describeAttempt,
@@ -241,10 +242,26 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
               `[run-task] ${result.excludedCount} model(s) excluded from ranking by routing-rules.json for this category`,
             );
           }
+          // SCO-330 (fix #4 bonus) — surfaced here alongside the other
+          // diagnostic lines above; also carried into the doc itself below
+          // (buildResultDocument's own truncation note), since a viewer of
+          // just the result document — the whole point of this fix — might
+          // never have the Output channel open at all.
+          if (result.execution.truncated) {
+            output.appendLine(
+              `[run-task] warning: ${result.topModel.provider} reports this response was cut off at the model's max output token limit — it may be incomplete.`,
+            );
+          }
 
-          output.appendLine(result.execution.text);
-          output.show(true);
-          vscode.window.showInformationMessage(`Modelglass: ran on ${result.topModel.name} — see the Modelglass output channel.`);
+          // SCO-330 (fix #4) — the actual answer goes in its own editor
+          // document now, not the Output channel: something to look at,
+          // edit, and copy from next to the code it's about, not a log line.
+          const doc = await vscode.workspace.openTextDocument({
+            content: buildResultDocument(CATEGORY_LABELS[result.category], result.topModel.name, result.execution),
+            language: "markdown",
+          });
+          await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: false });
+          vscode.window.showInformationMessage(`Modelglass: ran on ${result.topModel.name}.`);
           return;
         }
       }

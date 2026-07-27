@@ -140,6 +140,33 @@ describe("executeProviderCall — OpenAI-compatible adapter", () => {
     assert.equal(result.usage, undefined);
   });
 
+  // SCO-330 (fix #4 bonus)
+  test("finish_reason: 'length' sets truncated: true", async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(200, { choices: [{ message: { content: "42" }, finish_reason: "length" }] })) as typeof fetch;
+
+    const result = await executeProviderCall("openai", "sk-test", "openai/gpt-5.5", "hi");
+
+    assert.equal(result.truncated, true);
+  });
+
+  test("a present finish_reason other than 'length' sets truncated: false, not undefined", async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(200, { choices: [{ message: { content: "42" }, finish_reason: "stop" }] })) as typeof fetch;
+
+    const result = await executeProviderCall("openai", "sk-test", "openai/gpt-5.5", "hi");
+
+    assert.equal(result.truncated, false);
+  });
+
+  test("no finish_reason at all leaves truncated undefined -- unknown, not a claimed false", async () => {
+    globalThis.fetch = (async () => jsonResponse(200, { choices: [{ message: { content: "42" } }] })) as typeof fetch;
+
+    const result = await executeProviderCall("openai", "sk-test", "openai/gpt-5.5", "hi");
+
+    assert.equal(result.truncated, undefined);
+  });
+
   test("401 classifies as invalid-key", async () => {
     globalThis.fetch = (async () => jsonResponse(401, { error: "bad key" })) as typeof fetch;
     await assert.rejects(
@@ -267,6 +294,46 @@ describe("executeProviderCall — Anthropic adapter", () => {
         return true;
       },
     );
+  });
+
+  // SCO-330 (fix #4 bonus)
+  test("requests max_tokens: 8192, not the old hardcoded 4096", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push({ init });
+      return jsonResponse(200, { content: [{ text: "hi" }] });
+    }) as typeof fetch;
+
+    await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-sonnet-5", "hi");
+
+    const body = JSON.parse(calls[0]!.init.body as string);
+    assert.equal(body.max_tokens, 8192);
+  });
+
+  test("stop_reason: 'max_tokens' sets truncated: true", async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(200, { content: [{ text: "cut off mid-sen" }], stop_reason: "max_tokens" })) as typeof fetch;
+
+    const result = await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-sonnet-5", "hi");
+
+    assert.equal(result.truncated, true);
+  });
+
+  test("a present stop_reason other than 'max_tokens' (e.g. end_turn) sets truncated: false", async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(200, { content: [{ text: "complete." }], stop_reason: "end_turn" })) as typeof fetch;
+
+    const result = await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-sonnet-5", "hi");
+
+    assert.equal(result.truncated, false);
+  });
+
+  test("no stop_reason at all leaves truncated undefined", async () => {
+    globalThis.fetch = (async () => jsonResponse(200, { content: [{ text: "hi" }] })) as typeof fetch;
+
+    const result = await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-sonnet-5", "hi");
+
+    assert.equal(result.truncated, undefined);
   });
 });
 
