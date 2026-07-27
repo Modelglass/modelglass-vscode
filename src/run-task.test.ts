@@ -21,6 +21,7 @@ import {
   __resetFeedCacheForTests,
   FEED_CACHE_TTL_MS,
   MAX_CONTEXT_CHARS,
+  buildResultDocument,
   buildTaskPrompt,
   capSnippet,
   describeAttempt,
@@ -751,5 +752,33 @@ describe("buildTaskPrompt", () => {
     const context = makeContext({ truncated: false });
     const result = buildTaskPrompt("Do something", context);
     assert.ok(!result.includes("truncated"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCO-330 (fix #4) — buildResultDocument
+// ---------------------------------------------------------------------------
+
+describe("buildResultDocument", () => {
+  test("includes a header naming the category and model, then the response text", () => {
+    const doc = buildResultDocument("Bug fix / debug", "Claude Sonnet 5", { text: "Here's the fix." });
+    assert.match(doc, /^# Modelglass: Bug fix \/ debug — Claude Sonnet 5/);
+    assert.match(doc, /Here's the fix\.$/);
+  });
+
+  test("no truncation flag at all -- not just false -- carries no warning", () => {
+    const doc = buildResultDocument("Refactor", "Model", { text: "Done." });
+    assert.ok(!doc.includes("incomplete"));
+  });
+
+  test("truncated: false carries no warning", () => {
+    const doc = buildResultDocument("Refactor", "Model", { text: "Done.", truncated: false });
+    assert.ok(!doc.includes("incomplete"));
+  });
+
+  test("truncated: true adds a visible warning in the document itself, not just a log line", () => {
+    const doc = buildResultDocument("Test generation", "Model", { text: "partial output...", truncated: true });
+    assert.match(doc, /may be incomplete/);
+    assert.match(doc, /cut off at the model's max output token limit/);
   });
 });

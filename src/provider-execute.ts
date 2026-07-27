@@ -46,6 +46,18 @@ export interface ExecuteResult {
   text: string;
   modelIdUsed: string;
   usage?: ExecuteUsage;
+  /** SCO-330 (fix #4 bonus) — true when the provider's own stop/finish
+   *  reason says the response was cut off at the max-output-token limit,
+   *  not because the model was actually done. Previously unchecked
+   *  entirely for Anthropic (a hardcoded low max_tokens made this common
+   *  and silent); undefined when the provider's response didn't include a
+   *  usable stop/finish reason at all, which is not the same claim as
+   *  "definitely not truncated" -- callers should treat undefined as
+   *  unknown, not false. Matters more once (SCO-330 fix #4 itself) output
+   *  streams straight into an editor document instead of an Output-channel
+   *  log line: a silently truncated response there reads as a complete
+   *  answer sitting in the user's editor. */
+  truncated?: boolean;
 }
 
 /**
@@ -211,7 +223,7 @@ async function executeOpenAiCompatible(
   }
 
   const json = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
+    choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
     usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
   const text = json.choices?.[0]?.message?.content;
@@ -222,7 +234,15 @@ async function executeOpenAiCompatible(
     typeof json.usage?.prompt_tokens === "number" && typeof json.usage?.completion_tokens === "number"
       ? { inputTokens: json.usage.prompt_tokens, outputTokens: json.usage.completion_tokens }
       : undefined;
-  return { text, modelIdUsed: modelId, usage };
+  // SCO-330 (fix #4 bonus) -- the OpenAI-compatible finish_reason equivalent
+  // of Anthropic's stop_reason, same "length" == cut-off-by-limit meaning
+  // across every provider behind this adapter (OpenAI, DeepSeek, xAI,
+  // Mistral, Groq, Together AI, OpenRouter). A present-but-different reason
+  // (e.g. "stop") is a real "no, it wasn't" -- only a genuinely absent
+  // field collapses to unknown (undefined), not "stop".
+  const finishReason = json.choices?.[0]?.finish_reason;
+  const truncated = finishReason === undefined ? undefined : finishReason === "length";
+  return { text, modelIdUsed: modelId, usage, truncated };
 }
 
 async function executeAnthropic(
@@ -244,7 +264,15 @@ async function executeAnthropic(
       },
       body: JSON.stringify({
         model: modelId,
-        max_tokens: 4096,
+        // SCO-330 (fix #4 bonus) -- was a hardcoded 4096 with stop_reason
+        // never checked, so a long doc-gen/test-gen response could be cut
+        // off mid-sentence with zero signal. 8192 is the Messages API's
+        // default max output ceiling without an extended-output beta
+        // header (not added here -- a bigger, separate change); the real
+        // fix is that a cut-off response is now DETECTABLE (see stop_reason
+        // parsing below), not just "make the cap high enough to rarely
+        // matter."
+        max_tokens: 8192,
         messages: [{ role: "user", content: prompt }],
       }),
       signal: controller.signal,
@@ -269,6 +297,7 @@ async function executeAnthropic(
   const json = (await response.json()) as {
     content?: Array<{ text?: string }>;
     usage?: { input_tokens?: number; output_tokens?: number };
+    stop_reason?: string;
   };
   const text = json.content?.[0]?.text;
   if (typeof text !== "string") {
@@ -278,7 +307,11 @@ async function executeAnthropic(
     typeof json.usage?.input_tokens === "number" && typeof json.usage?.output_tokens === "number"
       ? { inputTokens: json.usage.input_tokens, outputTokens: json.usage.output_tokens }
       : undefined;
-  return { text, modelIdUsed: modelId, usage };
+  // SCO-330 (fix #4 bonus) -- "max_tokens" is Anthropic's stop_reason value
+  // for exactly this cutoff; any other present reason (e.g. "end_turn") is
+  // a real "no," only a genuinely absent field is unknown.
+  const truncated = json.stop_reason === undefined ? undefined : json.stop_reason === "max_tokens";
+  return { text, modelIdUsed: modelId, usage, truncated };
 }
 
 /**
