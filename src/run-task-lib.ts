@@ -35,6 +35,71 @@ import { resolveCategoryRanking, type RoutingRule } from "./routing-rules-lib.js
  * of the nine leaf categories.
  */
 
+// ---------------------------------------------------------------------------
+// SCO-330 (fix #3, from SCO-329's honest gap review — "Run Task's input is
+// hand-typed free text; the model never sees the active file, the
+// selection, or anything else... For a product routing dev tasks, the
+// router literally cannot see the code"). Pure, testable half lives here;
+// the vscode.window.activeTextEditor read lives in ./run-task.ts, same
+// lib/non-lib split as everything else in this file.
+// ---------------------------------------------------------------------------
+
+/** MAX_CONTEXT_CHARS is a budget for the PREPENDED context, not the whole
+ *  prompt — generous for the common "user selected a few lines" case, and a
+ *  deliberate ceiling for the "no selection, fall back to the whole file"
+ *  case so one huge open file doesn't crowd out the user's actual task
+ *  instruction or blow past a smaller model's context window before the
+ *  provider even sees the task. ~8000 chars is ~2000 tokens at a
+ *  conservative 4 chars/token -- generous for a snippet, a real ceiling for
+ *  a whole file. */
+export const MAX_CONTEXT_CHARS = 8_000;
+
+export interface EditorContext {
+  /** Workspace-relative when inside a workspace folder, absolute otherwise
+   *  (vscode.workspace.asRelativePath's own fallback) -- never leaks a path
+   *  outside what the user's own editor already shows them. */
+  relativePath: string;
+  languageId: string;
+  /** True when this is the user's selection; false when it's a size-capped
+   *  whole-file fallback (no selection made). */
+  isSelection: boolean;
+  snippet: string;
+  /** True if `snippet` was cut short at MAX_CONTEXT_CHARS -- surfaced so the
+   *  prompt can say so rather than silently feeding the model a truncated
+   *  file with no signal that anything is missing. */
+  truncated: boolean;
+}
+
+/** Caps `text` at MAX_CONTEXT_CHARS, cutting on a line boundary where
+ *  possible so a truncated snippet doesn't end mid-line. */
+export function capSnippet(text: string): { snippet: string; truncated: boolean } {
+  if (text.length <= MAX_CONTEXT_CHARS) return { snippet: text, truncated: false };
+  const cut = text.slice(0, MAX_CONTEXT_CHARS);
+  const lastNewline = cut.lastIndexOf("\n");
+  return { snippet: lastNewline > 0 ? cut.slice(0, lastNewline) : cut, truncated: true };
+}
+
+/**
+ * Prepends `context` (if any) to the user's typed task description as a
+ * fenced code block, so the model actually sees the file it's meant to be
+ * acting on. Returns `userPrompt` completely unchanged when `context` is
+ * undefined (no active editor, or no workspace) -- today's exact behavior,
+ * so a user with no editor open sees no change at all from this fix.
+ */
+export function buildTaskPrompt(userPrompt: string, context: EditorContext | undefined): string {
+  if (!context) return userPrompt;
+  const { relativePath, languageId, isSelection, snippet, truncated } = context;
+  const scope = isSelection ? "the selected code" : "the whole file (no selection was made)";
+  const truncationNote = truncated ? " -- truncated, this is not the complete file" : "";
+  return (
+    `Context: ${relativePath} (${languageId}), showing ${scope}${truncationNote}:\n` +
+    "```" +
+    `${languageId}\n${snippet}\n` +
+    "```\n\n" +
+    `Task: ${userPrompt}`
+  );
+}
+
 export const CATEGORY_LABELS: Record<LeafTaskCategory, string> = {
   "bug-fix": "Bug fix / debug",
   "new-code-generation": "New code generation (spec → code)",

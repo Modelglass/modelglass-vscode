@@ -20,11 +20,15 @@ import assert from "node:assert/strict";
 import {
   __resetFeedCacheForTests,
   FEED_CACHE_TTL_MS,
+  MAX_CONTEXT_CHARS,
+  buildTaskPrompt,
+  capSnippet,
   describeAttempt,
   fetchRoutableModels,
   routeAndExecute,
   routeAndExecuteWithFallback,
   type ConfiguredProviderKey,
+  type EditorContext,
   type ProviderAttempt,
 } from "./run-task-lib.js";
 import { ProviderExecutionError, type ExecuteResult } from "./provider-execute.js";
@@ -672,5 +676,80 @@ describe("fetchRoutableModels — feed cache (SCO-264)", () => {
       throw new Error("Modelglass API 503");
     };
     await assert.rejects(() => fetchRoutableModels("key", failingFetch), /Modelglass API 503/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCO-330 (fix #3) — editor context: capSnippet + buildTaskPrompt
+// ---------------------------------------------------------------------------
+
+function makeContext(overrides: Partial<EditorContext> = {}): EditorContext {
+  return {
+    relativePath: "src/handler.ts",
+    languageId: "typescript",
+    isSelection: true,
+    snippet: "function handler() {}",
+    truncated: false,
+    ...overrides,
+  };
+}
+
+describe("capSnippet", () => {
+  test("text at or under the cap is returned unchanged, not truncated", () => {
+    const text = "a".repeat(MAX_CONTEXT_CHARS);
+    const { snippet, truncated } = capSnippet(text);
+    assert.equal(snippet, text);
+    assert.equal(truncated, false);
+  });
+
+  test("text over the cap is cut and flagged truncated", () => {
+    const text = "a".repeat(MAX_CONTEXT_CHARS + 500);
+    const { snippet, truncated } = capSnippet(text);
+    assert.equal(truncated, true);
+    assert.ok(snippet.length <= MAX_CONTEXT_CHARS);
+  });
+
+  test("cuts on the last line boundary within the cap, not mid-line", () => {
+    const line = "x".repeat(100) + "\n";
+    const text = line.repeat(Math.ceil((MAX_CONTEXT_CHARS + 200) / line.length));
+    const { snippet, truncated } = capSnippet(text);
+    assert.equal(truncated, true);
+    // Every remaining line is a full 100-char line -- no partial line left dangling.
+    for (const l of snippet.split("\n")) {
+      assert.ok(l.length === 0 || l.length === 100);
+    }
+  });
+});
+
+describe("buildTaskPrompt", () => {
+  test("no editor context (nothing active, or no workspace) leaves the prompt completely unchanged", () => {
+    const result = buildTaskPrompt("Add input validation", undefined);
+    assert.equal(result, "Add input validation");
+  });
+
+  test("with a selection, labels it as such and includes the file path and language", () => {
+    const context = makeContext({ relativePath: "src/signup.ts", languageId: "typescript", isSelection: true, snippet: "const x = 1;" });
+    const result = buildTaskPrompt("Add validation", context);
+    assert.match(result, /Context: src\/signup\.ts \(typescript\), showing the selected code/);
+    assert.match(result, /```typescript\nconst x = 1;\n```/);
+    assert.match(result, /Task: Add validation$/);
+  });
+
+  test("with no selection, labels it as the whole file, not silently pretending it's a selection", () => {
+    const context = makeContext({ isSelection: false });
+    const result = buildTaskPrompt("Refactor this", context);
+    assert.match(result, /showing the whole file \(no selection was made\)/);
+  });
+
+  test("a truncated snippet says so in the prompt, rather than silently feeding a partial file", () => {
+    const context = makeContext({ isSelection: false, truncated: true });
+    const result = buildTaskPrompt("Summarise this file", context);
+    assert.match(result, /truncated, this is not the complete file/);
+  });
+
+  test("an un-truncated snippet carries no truncation note at all", () => {
+    const context = makeContext({ truncated: false });
+    const result = buildTaskPrompt("Do something", context);
+    assert.ok(!result.includes("truncated"));
   });
 });
