@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.2 — 2026-07-27
+
+The remaining two pre-video fixes from SCO-329's honest gap review (SCO-330),
+both about what a Run Task demo actually looks like on camera:
+
+- **Editor context (SCO-330).** Run Task now attaches your current
+  selection — or the whole file, if nothing's selected — as context when it
+  routes and calls a model, size-capped at ~8,000 characters (cut on a line
+  boundary, not mid-line). Previously the model never saw the code at all,
+  only your typed description of the task. No active editor: the prompt is
+  unchanged from before this release.
+- **Results open in an editor tab, not the Output channel (SCO-330).** The
+  response now opens beside your code in its own tab — labeled with the
+  category and model that produced it — instead of landing as a full text
+  dump in the Output panel with nothing to do but read and copy it. Still
+  non-streaming in this release; real token-by-token streaming across every
+  provider adapter is a larger, separate piece of work.
+- **Truncation is now detectable, not silent.** `executeAnthropic`'s
+  hardcoded 4,096-token cap (with no check of whether a response was cut
+  off) is raised to 8,192, and every provider adapter now reports whether a
+  response was cut off at the model's max output limit. Run Task warns
+  about it in both the Output channel and the result document itself, since
+  the whole point of the previous fix is that you might only ever look at
+  the document.
+
 ## 0.3.1 — 2026-07-27
 
 Fourteen commits of reliability, transparency, and quality-of-ranking fixes
