@@ -36,13 +36,21 @@ import {
  *   - priority: string[]            -- "custom priority ordering per category"
  *     (an ordered list of Modelglass model.id strings, most-preferred first)
  *   - minScore: number (0-1)        -- SCO-330: "cheapest model that still
- *     clears this quality bar" — see routing-engine.ts's partitionByMinScore
- *     for the ranking-side mechanics. Only meaningful for the five
- *     benchmark-scored categories (bug-fix, new-code-generation, terminal-cli,
- *     library-aware-feature-work, refactor); silently a no-op for the four
- *     capability-rating categories, per routing-engine.ts's own dispatcher
- *     comment — their 0-2 rating scale isn't threshold-comparable to a 0-1
- *     score.
+ *     clears THIS bar," overriding the ENGINE'S OWN DEFAULT bar rather than
+ *     introducing quality-filtering that wasn't there before (as of the
+ *     2026-07-29 default-flip, routing-engine.ts already applies a default,
+ *     per-benchmark quality bar with no rule at all — see
+ *     routing-engine.ts's `applyQualityBar` for the ranking-side mechanics
+ *     and why the default is per-benchmark, not one shared number). This
+ *     field is for a user who wants a DIFFERENT bar than the built-in
+ *     default, not the only way to get one at all. Only meaningful for the
+ *     five benchmark-scored categories (bug-fix, new-code-generation,
+ *     terminal-cli, library-aware-feature-work, refactor); silently a
+ *     no-op for the four capability-rating categories, per
+ *     routing-engine.ts's own dispatcher comment — their 0-2 rating scale
+ *     isn't threshold-comparable to a 0-1 score (and those four already
+ *     achieve cheapest-among-the-top-tier naturally, via the tie-break
+ *     their coarse rating scale triggers far more often).
  * `priority` and `strategy` are mutually exclusive within one rule (both are
  * full-ranking overrides; combining them is ambiguous, rejected at
  * validation rather than silently resolved by a precedence guess). `minScore`

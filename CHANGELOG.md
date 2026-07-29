@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.5.0 — 2026-07-29
+
+**The router's default is now genuinely cheapest-capable, not
+best-regardless-of-price (SCO-330, round 2).** Original SCO-330 (0.3.1)
+diagnosed the bug — `routing-engine.ts` ranked score-descending with price
+only a tie-break, so "Run Task on Cheapest Capable Model" could pick a
+$5/M 96.2%-scoring model over a $1.1/M 68%-scoring one — and shipped a fix,
+but only as an opt-in `minScore` field in `.modelglass/routing-rules.json`
+(Pro-only). Every existing user with no rules file still got the old
+score-first behavior by default. This release flips the DEFAULT itself:
+the five benchmark-scored categories (bug fix, new code generation,
+terminal/CLI, library-aware feature work, refactor) now each apply a
+built-in quality bar calibrated to that specific benchmark's real score
+range (checked against the live feed, not guessed — e.g. 60% on SWE-bench
+Verified, 50% on Aider Polyglot), then rank cheapest-first among whatever
+clears it. No configuration needed — every user gets this out of the box.
+
+An explicit `minScore` in `.modelglass/routing-rules.json` still works
+exactly as before, now as an override of the built-in default rather than
+the only way to get one. If every model happens to fall below the default
+bar (a thin/weak pool right now), the extension falls back to the
+old score-descending order rather than reporting nothing — an *explicit*
+`minScore` that excludes everyone still returns genuinely empty, since
+that's a deliberate choice the user should see plainly.
+
 ## 0.4.0 — 2026-07-29
 
 **The router is now available directly inside Copilot Chat (SCO-331).** No

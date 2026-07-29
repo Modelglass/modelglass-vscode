@@ -118,12 +118,15 @@ describe("routeAndExecute", () => {
 
     assert.equal(outcome.outcome, "success");
     assert.equal(outcome.outcome === "success" && outcome.topModel.name, "OpenAI Strong");
-    assert.equal(outcome.outcome === "success" && outcome.rankedCount, 2); // only the two openai models
+    // SCO-330 (default-flip): "OpenAI Weak" (0.4) falls below the default
+    // SWE-bench Pro bar (0.5), so it's now excluded rather than ranked —
+    // only "OpenAI Strong" (0.7, clears the bar) is left in `ranked`.
+    assert.equal(outcome.outcome === "success" && outcome.rankedCount, 1);
     assert.equal(outcome.outcome === "success" && outcome.execution.text, "the fix is...");
     // SCO-260 quick-win #2/#5: previously computed but dropped before reaching the caller.
     assert.match(outcome.outcome === "success" ? outcome.scoreLabel : "", /swe-bench pro/i);
     assert.deepEqual(outcome.outcome === "success" ? outcome.unmatchedPriorityIds : null, []);
-    assert.equal(outcome.outcome === "success" ? outcome.excludedCount : null, 0);
+    assert.equal(outcome.outcome === "success" ? outcome.excludedCount : null, 1);
 
     assert.equal(calls.length, 1);
     assert.equal(calls[0]!.provider, "openai");
@@ -234,10 +237,16 @@ describe("routeAndExecute", () => {
       benchmarks: [bench("swe-bench-pro", 0.9)],
       inputPricePerM: 20,
     });
+    // SCO-330 (default-flip): scored BELOW the default SWE-bench Pro bar
+    // (0.5) on purpose -- since the default is now itself
+    // cheapest-among-qualifiers, a model that ALSO clears the default bar
+    // wouldn't demonstrate any difference between "no rule" and "with a
+    // rule." This model only wins once an explicit "cheapest" rule ignores
+    // quality signal entirely; by default it's excluded, not ranked.
     const ruleWinner = makeModel({
       name: "RuleWinner",
       provider: "openai",
-      benchmarks: [bench("swe-bench-pro", 0.5)],
+      benchmarks: [bench("swe-bench-pro", 0.3)],
       inputPricePerM: 1,
     });
 
@@ -247,7 +256,9 @@ describe("routeAndExecute", () => {
       return { text: "done", modelIdUsed: modelId };
     };
 
-    // Without a rule, the benchmark-stronger (but pricier) model wins.
+    // Without a rule: RuleWinner falls below the default quality bar, so
+    // only BenchmarkWinner is actually ranked -- it wins by elimination,
+    // not because it's the highest scorer among equals.
     const withoutRule = await routeAndExecute(
       [benchmarkWinner, ruleWinner],
       "openai",
@@ -552,8 +563,15 @@ describe("routeAndExecuteWithFallback", () => {
   });
 
   test("SCO-281: when the same-provider retry ALSO fails (or there's no second model), falls through to the next provider as before", async () => {
-    const openaiOnly = makeModel({ name: "OpenAIOnly", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.9)] });
-    const anthropicModel = makeModel({ name: "AnthropicModel", provider: "anthropic", benchmarks: [bench("swe-bench-pro", 0.4)] });
+    // SCO-330 (default-flip): both scores set to clear the default
+    // SWE-bench Pro bar (0.5) -- anthropicModel used to be 0.4 (deliberately
+    // below the old score-first winner), which would now make it fail to
+    // qualify at all and drop out of the combined chain entirely, breaking
+    // this test's actual point (openai fails, falls through to anthropic).
+    // Explicit prices make the chain order (openai first) a deliberate
+    // "cheaper wins among qualifiers" fact, not incidental array order.
+    const openaiOnly = makeModel({ name: "OpenAIOnly", provider: "openai", benchmarks: [bench("swe-bench-pro", 0.9)], inputPricePerM: 1 });
+    const anthropicModel = makeModel({ name: "AnthropicModel", provider: "anthropic", benchmarks: [bench("swe-bench-pro", 0.6)], inputPricePerM: 10 });
 
     const calls: string[] = [];
     const stubExecute = async (provider: string, _k: string, modelId: string): Promise<ExecuteResult> => {

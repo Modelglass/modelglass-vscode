@@ -185,12 +185,28 @@ describe("normaliseOfferings", () => {
 // ---------------------------------------------------------------------------
 
 describe("rankBugFix", () => {
-  test("ranks by SWE-bench Pro descending when present", () => {
+  // SCO-330 (default-flip, 2026-07-29): the DEFAULT (no minScore argument)
+  // is now cheapest-among-models-clearing-that-benchmark's-own-default-bar
+  // (DEFAULT_MIN_SCORE_BY_BENCHMARK["swe-bench-pro"] = 0.5), not
+  // score-descending. Both 0.69 and 0.58 clear 0.5, so the cheaper one wins
+  // by default now — this replaces the old "ranks... descending" test,
+  // which asserted exactly the behavior SCO-329/330 identified as the bug.
+  test("both models clear the default SWE-bench Pro bar (0.5) — cheapest of the two wins by default", () => {
     const strong = makeModel({ name: "Strong", benchmarks: [bench("swe-bench-pro", 0.69)], inputPricePerM: 10 });
     const weaker = makeModel({ name: "Weaker", benchmarks: [bench("swe-bench-pro", 0.58)], inputPricePerM: 1 });
-    const { ranked } = rankBugFix([weaker, strong]);
-    assert.deepEqual(ranked.map((r) => r.model.name), ["Strong", "Weaker"]);
-    assert.match(ranked[0]!.scoreLabel, /SWE-bench Pro 69\.0%/);
+    const { ranked, excluded } = rankBugFix([weaker, strong]);
+    assert.deepEqual(ranked.map((r) => r.model.name), ["Weaker", "Strong"]);
+    assert.equal(excluded.length, 0);
+  });
+
+  test("a model below the default SWE-bench Pro bar is excluded, even if cheaper than every qualifier", () => {
+    const qualifies = makeModel({ name: "Qualifies", benchmarks: [bench("swe-bench-pro", 0.55)], inputPricePerM: 10 });
+    const tooWeak = makeModel({ name: "TooWeak", benchmarks: [bench("swe-bench-pro", 0.3)], inputPricePerM: 0.5 });
+    const { ranked, excluded } = rankBugFix([tooWeak, qualifies]);
+    assert.deepEqual(ranked.map((r) => r.model.name), ["Qualifies"]);
+    assert.equal(excluded.length, 1);
+    assert.equal(excluded[0]!.model.name, "TooWeak");
+    assert.match(excluded[0]!.reason, /below the default quality bar/);
   });
 
   test("prefers SWE-bench Pro over Verified when a model has both", () => {
@@ -233,20 +249,26 @@ describe("rankBugFix", () => {
 // ---------------------------------------------------------------------------
 
 describe("rankBugFix minScore", () => {
-  test("reproduces, then fixes, SCO-329's exact live example: GPT-5.6 Sol (96.2%, $5/M) vs o4-mini (68%, $1.1/M)", () => {
+  test("SCO-329's exact live example is fixed BY DEFAULT now, with no rules file needed: GPT-5.6 Sol (96.2%, $5/M) vs o4-mini (68%, $1.1/M)", () => {
     const gpt56Sol = makeModel({ name: "GPT-5.6 Sol", benchmarks: [bench("swe-bench-verified", 0.962)], inputPricePerM: 5 });
     const o4Mini = makeModel({ name: "o4-mini", benchmarks: [bench("swe-bench-verified", 0.68)], inputPricePerM: 1.1 });
 
-    // Without a threshold: reproduces the bug exactly as SCO-329 found it —
-    // best-score-first picks the $5/M model over the $1.1/M one.
-    const noThreshold = rankBugFix([o4Mini, gpt56Sol]);
-    assert.equal(noThreshold.ranked[0]!.model.name, "GPT-5.6 Sol");
+    // No minScore argument at all -- this is now what every existing user
+    // gets with zero configuration. DEFAULT_MIN_SCORE_BY_BENCHMARK's
+    // swe-bench-verified bar (0.6) lets both qualify (96.2% and 68% both
+    // clear it) -- cheapest of the qualifiers wins, which is o4-mini. This
+    // is the exact case SCO-329 flagged and SCO-330 originally only fixed
+    // via an opt-in minScore rule; this second pass makes it the default.
+    const noRule = rankBugFix([o4Mini, gpt56Sol]);
+    assert.equal(noRule.ranked[0]!.model.name, "o4-mini");
+    assert.equal(noRule.excluded.length, 0);
 
-    // With a 65% bar: both qualify (68% and 96.2% both clear it) — cheapest
-    // of the qualifiers wins, which is o4-mini, not the priciest passer.
-    const withThreshold = rankBugFix([o4Mini, gpt56Sol], 0.65);
-    assert.equal(withThreshold.ranked[0]!.model.name, "o4-mini");
-    assert.equal(withThreshold.excluded.length, 0);
+    // An explicit, higher minScore (routing-rules.json) still overrides the
+    // default and behaves exactly as SCO-330 originally shipped.
+    const explicitHigherBar = rankBugFix([o4Mini, gpt56Sol], 0.9);
+    assert.equal(explicitHigherBar.ranked[0]!.model.name, "GPT-5.6 Sol");
+    assert.equal(explicitHigherBar.excluded.length, 1);
+    assert.equal(explicitHigherBar.excluded[0]!.model.name, "o4-mini");
   });
 
   test("a model below the threshold is excluded with a reason, not silently dropped or ranked", () => {
@@ -261,7 +283,7 @@ describe("rankBugFix minScore", () => {
     assert.match(excluded[0]!.reason, /below the minScore quality bar/);
   });
 
-  test("no qualifying model at all yields an empty ranked list, all moved to excluded", () => {
+  test("no qualifying model at all yields an empty ranked list, all moved to excluded — an EXPLICIT minScore gets no safety net", () => {
     const a = makeModel({ name: "A", benchmarks: [bench("swe-bench-pro", 0.3)] });
     const b = makeModel({ name: "B", benchmarks: [bench("swe-bench-pro", 0.2)] });
 
@@ -269,6 +291,21 @@ describe("rankBugFix minScore", () => {
 
     assert.equal(ranked.length, 0);
     assert.equal(excluded.length, 2);
+  });
+
+  // SCO-330 (default-flip) — the safety valve. An EXPLICIT minScore that
+  // excludes everyone (above) stays genuinely empty; the DEFAULT bar
+  // excluding everyone falls back to score-descending instead, so a
+  // temporarily weak pool doesn't just look broken.
+  test("when EVERY model falls below the default bar, falls back to score-descending over the whole pool instead of an empty ranking", () => {
+    const weaker = makeModel({ name: "Weaker", benchmarks: [bench("swe-bench-pro", 0.2)], inputPricePerM: 1 });
+    const stronger = makeModel({ name: "Stronger", benchmarks: [bench("swe-bench-pro", 0.35)], inputPricePerM: 10 });
+
+    // No minScore argument -- both are below the default 0.5 bar.
+    const { ranked, excluded } = rankBugFix([weaker, stronger]);
+
+    assert.deepEqual(ranked.map((r) => r.model.name), ["Stronger", "Weaker"]);
+    assert.equal(excluded.length, 0);
   });
 
   test("an unscored model (no benchmark at all) stays unscored, not excluded, when a threshold is set", () => {
