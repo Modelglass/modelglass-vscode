@@ -15,6 +15,7 @@ import {
   ProviderExecutionError,
   executeProviderCall,
   resolveProviderModelId,
+  type ChatMessage,
 } from "./provider-execute.js";
 
 const originalFetch = globalThis.fetch;
@@ -253,6 +254,87 @@ describe("executeProviderCall — OpenAI-compatible adapter", () => {
         return true;
       },
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCO-331 — multi-turn conversation support (vscode.lm forwards a full
+// message history, not one flattened string). A bare `string` prompt still
+// works identically everywhere (covered by every pre-existing test above,
+// unmodified); these tests cover the new `ChatMessage[]` path specifically.
+// ---------------------------------------------------------------------------
+
+describe("executeProviderCall — multi-turn messages (SCO-331)", () => {
+  test("OpenAI-compatible adapter forwards a full ChatMessage[] conversation as-is, roles included", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push({ init });
+      return jsonResponse(200, { choices: [{ message: { content: "42" } }] });
+    }) as typeof fetch;
+
+    const conversation: ChatMessage[] = [
+      { role: "system", content: "You are a helpful coding assistant." },
+      { role: "user", content: "What is 6*7?" },
+      { role: "assistant", content: "Let me think." },
+      { role: "user", content: "Well?" },
+    ];
+
+    await executeProviderCall("openai", "sk-test", "openai/gpt-5.5", conversation);
+
+    const body = JSON.parse(calls[0]!.init.body as string);
+    assert.deepEqual(body.messages, conversation);
+  });
+
+  test("Anthropic adapter splits system messages into the top-level system field, not the messages array", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push({ init });
+      return jsonResponse(200, { content: [{ text: "hello there" }] });
+    }) as typeof fetch;
+
+    const conversation: ChatMessage[] = [
+      { role: "system", content: "You are a helpful coding assistant." },
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "hello" },
+      { role: "user", content: "how are you?" },
+    ];
+
+    await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-sonnet-5", conversation);
+
+    const body = JSON.parse(calls[0]!.init.body as string);
+    assert.equal(body.system, "You are a helpful coding assistant.");
+    assert.deepEqual(body.messages, [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "hello" },
+      { role: "user", content: "how are you?" },
+    ]);
+  });
+
+  test("Anthropic adapter omits the system field entirely when no system message is present", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push({ init });
+      return jsonResponse(200, { content: [{ text: "hello there" }] });
+    }) as typeof fetch;
+
+    const conversation: ChatMessage[] = [{ role: "user", content: "hi" }];
+    await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-sonnet-5", conversation);
+
+    const body = JSON.parse(calls[0]!.init.body as string);
+    assert.equal("system" in body, false);
+  });
+
+  test("a bare string prompt (every pre-existing caller) still produces the exact one-element user-message array as before", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push({ init });
+      return jsonResponse(200, { choices: [{ message: { content: "42" } }] });
+    }) as typeof fetch;
+
+    await executeProviderCall("openai", "sk-test", "openai/gpt-5.5", "What is 6*7?");
+
+    const body = JSON.parse(calls[0]!.init.body as string);
+    assert.deepEqual(body.messages, [{ role: "user", content: "What is 6*7?" }]);
   });
 });
 

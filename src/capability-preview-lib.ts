@@ -142,7 +142,12 @@ export function summarizeCombinedCapabilityPreview(preview: CombinedCapabilityPr
  * published score for it, so this stays empty for every provider, not just
  * ones Modelglass has thin data for.
  */
-const INDUSTRY_WIDE_GAP_NOTE: Partial<Record<LeafTaskCategory, string>> = {
+// SCO-332 -- exported so both this file's own Output-channel preview AND
+// run-task.ts's category QuickPick (surfaced at the actual decision point,
+// not just after the fact) and lm-provider-lib.ts's pseudo-model
+// descriptions all read from the exact same map -- one hand-maintained gap
+// list, not three copies that could drift.
+export const INDUSTRY_WIDE_GAP_NOTE: Partial<Record<LeafTaskCategory, string>> = {
   "library-aware-feature-work":
     "no current-gen model anywhere has a published score for this yet, not just here",
 };
@@ -157,6 +162,21 @@ export function formatCategoryLines(preview: { categories: CategoryPreview[] }):
     const note = c.routableCount === 0 ? INDUSTRY_WIDE_GAP_NOTE[c.category] : undefined;
     return note ? `${base} (${note})` : base;
   });
+}
+
+/**
+ * SCO-332 — a QuickPick-description-length label ("7/9 categories
+ * routable", "0/9 categories routable"), for annotating the provider picker
+ * itself BEFORE key entry (provider-keys.ts) rather than only warning
+ * after, per the design principle this card settled on: never hide a
+ * zero-coverage option outright, surface the "why" as early as possible
+ * using data the engine already computes. `summarizeCapabilityPreview`
+ * above is the right length for a notification; this is the short form for
+ * a picker row.
+ */
+export function shortCoverageLabel(preview: CapabilityPreview): string {
+  if (preview.noModelsForProvider) return "no models in the current feed";
+  return `${preview.routable.length}/${preview.categories.length} categories routable today`;
 }
 
 /** A single-line summary suitable for a notification/info message. */

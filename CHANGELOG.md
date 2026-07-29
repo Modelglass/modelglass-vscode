@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.0 — 2026-07-29
+
+**The router is now available directly inside Copilot Chat (SCO-331).** No
+more Command Palette-only — Modelglass registers as a `vscode.lm` chat
+provider ("Modelglass Router" in the model picker), exposing 9 selectable
+models, one per task category (Bug fix / debug, New code generation,
+Terminal/CLI/DevOps, Library-aware feature work, Refactor, Test generation,
+Documentation generation, Chat/explain, Autocomplete — matching Run Task's
+existing taxonomy exactly, deliberately no auto-classifier). Pick one, send
+a message, and it routes through the exact same ranking + Pro/Starter
+fallback-chain + tier-gating logic Run Task already uses — same keys, same
+`.modelglass/routing-rules.json` support, same client-side-only execution
+(ADR-0012 unchanged: still no Modelglass proxy in the request path). Requires
+VS Code 1.104+ (bumped from 1.85 — this is the first release needing it);
+gracefully no-ops on older installs, every existing command is unaffected
+either way.
+
+New capability underneath this, usable from Run Task too in the future:
+`provider-execute.ts`'s adapters now accept a full multi-turn conversation
+(`ChatMessage[]`), not just one flattened string — necessary since Copilot
+Chat forwards real conversation history on every call, something Run Task
+itself has never sent.
+
+**Also folds in the SCO-332 unroutable-category/provider design** decided
+alongside this: the provider setup picker (**Set/Add Provider API Key**) now
+shows each provider's live routable-category coverage ("7/9 categories
+routable today") right in the picker, before you paste a key — not only as
+a warning afterward. **Run Task**'s category picker does the same, plus
+notes when a category (like Library-aware feature work) is empty for
+*every* provider due to an industry-wide benchmark gap, not a Modelglass
+one. Nothing is hidden — every option stays selectable; the gap is just
+visible earlier.
+
 ## 0.3.2 — 2026-07-27
 
 The remaining two pre-video fixes from SCO-329's honest gap review (SCO-330),

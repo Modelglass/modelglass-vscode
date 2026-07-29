@@ -32,7 +32,7 @@ import {
   type EditorContext,
   type ProviderAttempt,
 } from "./run-task-lib.js";
-import { ProviderExecutionError, type ExecuteResult } from "./provider-execute.js";
+import { ProviderExecutionError, type ChatMessage, type ExecuteResult } from "./provider-execute.js";
 import type { RoutingRule } from "./routing-rules-lib.js";
 import type { ModelEntry, RoutableModel } from "./routing-engine.js";
 
@@ -101,8 +101,8 @@ describe("routeAndExecute", () => {
       benchmarks: [bench("swe-bench-pro", 0.99)],
     });
 
-    const calls: Array<{ provider: string; apiKey: string; modelId: string; prompt: string }> = [];
-    const stubExecute = async (provider: string, apiKey: string, modelId: string, prompt: string): Promise<ExecuteResult> => {
+    const calls: Array<{ provider: string; apiKey: string; modelId: string; prompt: string | ChatMessage[] }> = [];
+    const stubExecute = async (provider: string, apiKey: string, modelId: string, prompt: string | ChatMessage[]): Promise<ExecuteResult> => {
       calls.push({ provider, apiKey, modelId, prompt });
       return { text: "the fix is...", modelIdUsed: modelId };
     };
@@ -147,7 +147,7 @@ describe("routeAndExecute", () => {
       _provider: string,
       _apiKey: string,
       modelId: string,
-      _prompt: string,
+      _prompt: string | ChatMessage[],
       _timeoutMs?: number,
       explicitProviderModelId?: string,
     ): Promise<ExecuteResult> => {
@@ -174,7 +174,7 @@ describe("routeAndExecute", () => {
       _provider: string,
       _apiKey: string,
       modelId: string,
-      _prompt: string,
+      _prompt: string | ChatMessage[],
       _timeoutMs?: number,
       explicitProviderModelId?: string,
     ): Promise<ExecuteResult> => {

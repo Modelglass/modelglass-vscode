@@ -12,7 +12,34 @@ There are two distinct routing commands in this extension — see
 [Commands](#commands) below for exactly how they differ. **Route Task** (the
 original MVP command) only *recommends* a model; it never calls any provider
 API. **Run Task** (new in v0.3.0) *executes* the call, using a provider key
-you supply.
+you supply. **Since v0.4.0, the router is also available directly inside
+Copilot Chat** — see [Use inside Copilot Chat](#use-inside-copilot-chat)
+below.
+
+## Use inside Copilot Chat
+
+New in v0.4.0. Once a provider key is configured, open Copilot Chat's model
+picker and look for **Modelglass Router** — it lists 9 selectable models,
+one per Run Task's existing task category (Bug fix / debug, New code
+generation, Terminal/CLI/DevOps, Library-aware feature work, Refactor, Test
+generation, Documentation generation, Chat/explain, Autocomplete). Pick the
+one that matches what you're doing and chat normally — every message routes
+through the exact same ranking, Pro/Starter fallback chain, and
+`.modelglass/routing-rules.json` support as Run Task, using your own
+configured key(s), with no Modelglass proxy in the request path (ADR-0012,
+unchanged).
+
+Deliberately no automatic task-classifier: nine explicit models, not one
+smart one, matching this extension's existing "explicit choice over hidden
+magic" philosophy for Run Task's own category picker. A model whose category
+has no routable model for your configured provider(s) right now still
+appears in the picker (never hidden — see [Provider API keys](#provider-api-keys)
+below for the same principle applied to key setup) and responds with a clear
+explanation instead of a routed answer.
+
+Requires VS Code 1.104 or newer. On an older VS Code, this integration
+silently doesn't register — every other command in this extension is
+unaffected.
 
 ## Route Task to Cheapest Capable Model
 
@@ -120,7 +147,9 @@ categories that provider actually has routable models for — registry
 benchmark coverage is sparse enough that some providers/categories resolve
 to zero models today, and this makes that gap visible immediately (Output
 channel breakdown, plus a notification if coverage is partial or zero)
-instead of discovered mid-task.
+instead of discovered mid-task. Since v0.4.0, both the **Set** and **Add**
+provider pickers show this same coverage (e.g. "7/9 categories routable
+today") right on each provider option, before you even paste a key.
 
 ## Commands
 
@@ -158,6 +187,13 @@ instead of discovered mid-task.
   possible future direction, not built.
 - No escalation/usage-logging (the CLI's `report` command's feature set) — out
   of scope for this extension.
+- **Copilot Chat integration (v0.4.0) is v1-scoped**: text-only (no image
+  input, no tool calling — a message containing only non-text parts is
+  answered as if it were empty rather than erroring), non-streaming (one
+  complete response per turn, not token-by-token — VS Code's own official
+  sample extension does the same, so this isn't a stopgap), and no deep
+  cancellation into the underlying provider call once it's started. All
+  three are real, separately-scoped follow-ups, not silently dropped.
 
 ## Relationship to `cost-aware-vscode-router`
 

@@ -15,6 +15,7 @@ import {
   previewCombinedCapabilities,
   summarizeCombinedCapabilityPreview,
   formatCategoryLines,
+  shortCoverageLabel,
 } from "./capability-preview-lib.js";
 import type { RoutableModel } from "./routing-engine.js";
 
@@ -243,5 +244,49 @@ describe("summarizeCombinedCapabilityPreview", () => {
     const summary = summarizeCombinedCapabilityPreview(combined);
     assert.match(summary, /of \d+ task categories/);
     assert.match(summary, /still no routable models for/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCO-332 — shortCoverageLabel: a picker-row-length annotation, so the
+// provider setup QuickPick can show coverage BEFORE key entry, not just warn
+// after.
+// ---------------------------------------------------------------------------
+
+describe("shortCoverageLabel", () => {
+  test("a provider with no models in the feed at all gets a distinct label, not \"0/9\"", () => {
+    const anthropicOnly = makeModel({ name: "Claude", provider: "anthropic", benchmarks: [bench("swe-bench-pro", 0.9)] });
+    const preview = previewProviderCapabilities([anthropicOnly], "groq");
+    assert.equal(shortCoverageLabel(preview), "no models in the current feed");
+  });
+
+  test("a provider with models but zero routable categories reports 0/N", () => {
+    const groqModel = makeModel({ name: "Groq Model", provider: "groq" }); // no benchmarks/capability -- unscored everywhere
+    const preview = previewProviderCapabilities([groqModel], "groq");
+    assert.match(shortCoverageLabel(preview), /^0\/\d+ categories routable today$/);
+  });
+
+  test("a provider routable for every category reports N/N", () => {
+    const fullyCovered = makeModel({
+      name: "Fully Covered",
+      provider: "openai",
+      benchmarks: [
+        bench("swe-bench-pro", 0.7),
+        bench("aider-polyglot", 0.7),
+        bench("terminal-bench-2-1", 0.7),
+        bench("bigcodebench", 0.7),
+      ],
+      capability: new Map([
+        ["coding", "strong"],
+        ["instruction-following", "strong"],
+        ["speed", "strong"],
+      ]),
+    });
+    fullyCovered.benchmarks[2] = { ...fullyCovered.benchmarks[2]!, harness: "terminus-2" };
+    fullyCovered.benchmarks[3] = { ...fullyCovered.benchmarks[3]!, variant: "hard" };
+
+    const preview = previewProviderCapabilities([fullyCovered], "openai");
+    const total = preview.categories.length;
+    assert.equal(shortCoverageLabel(preview), `${total}/${total} categories routable today`);
   });
 });
