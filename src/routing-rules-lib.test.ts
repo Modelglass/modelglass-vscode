@@ -164,7 +164,11 @@ describe("resolveCategoryRanking", () => {
       bugFixRanking.ranked.map((r) => r.model.name),
       defaultBugFixRanking.ranked.map((r) => r.model.name),
     );
-    assert.deepEqual(bugFixRanking.ranked.map((r) => r.model.name), ["StrongExpensive", "Cheap"]); // benchmark-ranked, unaffected
+    // SCO-330 (default-flip): both clear the default SWE-bench Pro bar
+    // (0.5), so the default itself is now cheapest-first among qualifiers —
+    // this assertion is about the rule-scoping behavior (a rule elsewhere
+    // doesn't leak into this category), not about which model wins.
+    assert.deepEqual(bugFixRanking.ranked.map((r) => r.model.name), ["Cheap", "StrongExpensive"]);
 
     // Meanwhile autocomplete's own rule DOES flip cheapest to the top.
     const autocompleteModels = [

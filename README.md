@@ -69,11 +69,18 @@ unaffected.
    Modelglass's live benchmark/capability feed (SWE-bench Pro/Verified,
    Terminal-Bench 2.1, Aider Polyglot/LiveCodeBench, or BigCodeBench,
    depending on category — with a qualitative capability-rating fallback for
-   categories no benchmark covers well) and **calls the top-ranked model
-   directly**, using your own key. Supports OpenAI, Anthropic, DeepSeek,
-   xAI, Mistral, Groq, Together AI, and OpenRouter. That feed is cached
-   locally for ~5 minutes, so a brief Modelglass API blip doesn't block a
-   Run Task call — a fetch failure past that window falls back to the last
+   categories no benchmark covers well) and **calls the cheapest model that
+   still clears a quality bar**, using your own key — not simply the
+   highest-scoring one regardless of price, matching this command's own
+   name. Each of the five benchmark-scored categories has its own default
+   bar (calibrated to that benchmark's real score range — e.g. 60% on SWE-bench
+   Verified, 50% on Aider Polyglot); if every model in your configured
+   provider(s) happens to fall below it, that's a sign the bar doesn't fit
+   today's pool and the extension falls back to the highest-scoring model
+   instead of reporting nothing. Supports OpenAI, Anthropic, DeepSeek, xAI,
+   Mistral, Groq, Together AI, and OpenRouter. That feed is cached locally
+   for ~5 minutes, so a brief Modelglass API blip doesn't block a Run Task
+   call — a fetch failure past that window falls back to the last
    known-good feed instead of failing the run. The response opens in its
    own editor tab beside your code (not the Output channel) — labeled with
    the category and model that produced it, and flagged if the provider
@@ -88,15 +95,18 @@ unaffected.
    same provider twice), up to one attempt per configured provider. Pro
    also unlocks an optional `.modelglass/routing-rules.json` file in your
    workspace to override the default ranking per category — exclude a
-   provider, force cheapest-first, set an exact model priority order, or set
-   a `minScore` (0–1) quality bar so the category ranks *cheapest among
-   models that clear the bar*, instead of the highest-scoring model
-   regardless of price. `minScore` only applies to the five benchmark-scored
+   provider, force cheapest-first ignoring quality entirely, set an exact
+   model priority order, or set your own `minScore` (0–1) quality bar in
+   place of the built-in per-benchmark default described above.
+   `minScore`/`strategy`/`priority` only apply to the five benchmark-scored
    categories (bug fix, new code generation, terminal/CLI, library-aware
-   feature work, refactor); it's a no-op for the four categories that fall
-   back to a qualitative capability rating. A Starter user with a
-   `routing-rules.json` present, or attempting to configure more than one
-   provider key, gets a clear upgrade prompt rather than a silent failure.
+   feature work, refactor); `minScore` specifically is a no-op for the four
+   categories that fall back to a qualitative capability rating (those
+   already land on cheapest-among-the-top-rating-tier by default, since a
+   coarse rating scale ties far more often than a continuous benchmark
+   score). A Starter user with a `routing-rules.json` present, or
+   attempting to configure more than one provider key, gets a clear upgrade
+   prompt rather than a silent failure.
 
 ## Install
 

@@ -263,6 +263,15 @@ export interface RankedModel {
   /** Human-readable justification, e.g. "SWE-bench Pro 69.2%" or
    *  "capability_profile.coding = strong (no SWE-bench score available)". */
   scoreLabel: string;
+  /** SCO-330 (default-flip) — internal-use only, set exclusively by
+   *  rankByBenchmark/rankTerminalCli so `applyQualityBar` knows which
+   *  DEFAULT_MIN_SCORE_BY_BENCHMARK entry applies to THIS model's score
+   *  when no explicit `minScore` override is set. Absent for
+   *  capability-rating scores (that 0-2 scale isn't threshold-comparable to
+   *  a 0-1 default, same reasoning `rankModelsForCategory`'s own dispatcher
+   *  comment already gives for why minScore is a no-op there). Not meant to
+   *  be read by any caller outside this file. */
+  defaultMinScoreKey?: string;
 }
 
 export interface CategoryRanking {
@@ -283,55 +292,145 @@ const cheaperFirst = (a: RoutableModel, b: RoutableModel) =>
   (a.inputPricePerM ?? Infinity) - (b.inputPricePerM ?? Infinity);
 
 /**
- * SCO-330 (from SCO-329's honest gap review, §2b) — the missing quality bar.
- * Without a `minScore`, this file ranked score-descending with price only a
- * tie-break, so "Run Task on Cheapest Capable Model" could pick a 96.2%
- * $5/M model over a 68% $1.1/M one — cheaper-and-still-capable never got a
- * look-in once anything scored higher. `minScore` (0-1, same scale as a raw
- * benchmark score) flips the sort for models that clear it: cheapest-first
- * among qualifiers, not best-first among everyone. Below-threshold models
- * move to `excluded` with a stated reason — dropped, never silently ranked
- * low, matching this file's existing "every exclusion carries a reason"
- * convention (see the terminal-cli harness exclusion below).
+ * SCO-330 (default-flip, 2026-07-29) — the router's DEFAULT is now
+ * cheapest-among-comparably-capable, not best-score-regardless-of-price.
+ * History: SCO-329's honest gap review (§2b) found this file ranked
+ * score-descending with price only a tie-break, so "Run Task on Cheapest
+ * Capable Model" could pick a 96.2% $5/M model over a 68% $1.1/M one —
+ * cheaper-and-still-capable never got a look-in once anything scored
+ * higher. The first fix (SCO-330, 2026-07-27) added `minScore` as an
+ * OPT-IN field in `.modelglass/routing-rules.json` — real, but it left the
+ * default untouched, so the gap the command's own name promises
+ * ("cheapest capable") was still only available to Pro users who'd
+ * written a rules file. This pass closes that: the default itself now
+ * applies a quality bar, not just an explicit one.
  *
- * Undefined `minScore` (the common case — no rule set one) leaves the
- * original score-descending behavior completely untouched; this is an
- * additive filter+resort, not a replacement of the default engine.
+ * One absolute number PER BENCHMARK, not one shared global number, and not
+ * a percentile/relative-margin cutoff. Checked directly against the live
+ * feed (2026-07-29, GET /v1/models?modality=llm): SWE-bench Verified scores
+ * currently span 21%-96.2%, Aider Polyglot spans 15.6%-72% — one shared
+ * threshold would be far too loose for the easy end of one benchmark or
+ * far too strict for the hard end of another. A percentile cutoff (e.g.
+ * "top half of today's pool") was considered and rejected: it would make a
+ * model's qualification depend on which OTHER models happen to be
+ * currently registered, an unstable property with no clear meaning a user
+ * could reason about — an absolute bar means "clears at least X% on this
+ * benchmark," true or false independent of the rest of the pool, and
+ * reuses the exact semantic the already-shipped explicit `minScore` field
+ * already established rather than inventing a second mental model for
+ * defaults specifically.
  */
-function partitionByMinScore(
+const DEFAULT_MIN_SCORE_BY_BENCHMARK: Record<string, number> = {
+  // 58.1%-63.2% in the live feed (only 2 models scored) — a bar low enough
+  // to keep both in play; SWE-bench Pro is the harder/newer benchmark, so
+  // its natural range sits well below Verified's.
+  "swe-bench-pro": 0.5,
+  // 21%-96.2% in the live feed (15 models) — 0.6 cleanly separates the
+  // genuinely weak end (Llama 4 Maverick 21%, Mistral Large 3 41.4%) from
+  // everything else, and is exactly the bar that lets o4-mini (68.1%)
+  // qualify alongside pricier 90%+ models — the concrete case SCO-329's
+  // review named.
+  "swe-bench-verified": 0.6,
+  // 15.6%-72% in the live feed (5 models) — 0.5 excludes only the clear
+  // outlier (Llama 4 Maverick, 15.6%), keeping the rest (53.3%-72%) in play.
+  "aider-polyglot": 0.5,
+  // 43.4%-72.8% in the live feed (4 models) — same reasoning as Aider
+  // Polyglot; 0.5 excludes only Llama 4 Maverick (43.4%).
+  livecodebench: 0.5,
+  // 67%-80.4% in the live feed (2 models, Terminus-2 harness only) — 0.6
+  // keeps both in play, same shape as swe-bench-pro above.
+  "terminal-bench-2-1": 0.6,
+  // LOW-CONFIDENCE PLACEHOLDER: the live feed has ZERO current-gen models
+  // with a BigCodeBench score at all (its dataset hasn't been updated
+  // since April 2025 — see capability-preview-lib.ts's
+  // INDUSTRY_WIDE_GAP_NOTE), so there's no real data to calibrate against
+  // yet. 0.3 is a guess, not a measurement — revisit the moment a model
+  // actually gets scored on this benchmark.
+  bigcodebench: 0.3,
+};
+
+/**
+ * Applies a quality bar to an already-scored `ranked` list, partitioning
+ * into qualifying (sorted cheapest-first) and sub-threshold (moved to
+ * `excluded` with a stated reason — never silently dropped, matching this
+ * file's existing "every exclusion carries a reason" convention).
+ *
+ * Two modes, both ending in the same cheapest-first sort:
+ *  - explicit `minScore` (routing-rules.json, SCO-330's original scope):
+ *    ONE absolute bar applied to every model in the category, regardless of
+ *    which benchmark backed its score. A user who set this made a
+ *    deliberate choice; a category where nothing clears it returns
+ *    genuinely empty — no safety net (see below), since silently
+ *    overriding an explicit choice would be worse than an honest "nothing
+ *    qualifies your bar."
+ *  - no `minScore` (the default): each model is checked against ITS OWN
+ *    benchmark's default via `defaultMinScoreKey` — necessary because one
+ *    category can mix benchmarks with very different natural ranges (e.g.
+ *    bug-fix: some models scored via SWE-bench Pro, others via Verified
+ *    fallback — see `DEFAULT_MIN_SCORE_BY_BENCHMARK`'s own header).
+ *
+ * SAFETY VALVE (default mode only): if the default bar excludes every
+ * single scored model in this pool, that's a sign the bar doesn't fit
+ * today's pool (e.g. every current offering for this provider/category
+ * happens to be genuinely weak) — falls back to the pre-this-change
+ * score-descending order over the full pool, rather than returning a
+ * category that looks completely dead. This fallback is deliberately NOT
+ * applied when `minScore` is explicit: a user's own deliberate bar
+ * excluding everyone is a real, honest result they should see plainly, not
+ * have silently second-guessed.
+ */
+function applyQualityBar(
   ranked: RankedModel[],
   minScore: number | undefined,
-): { qualifying: RankedModel[]; subThreshold: { model: RoutableModel; reason: string }[] } {
-  if (minScore === undefined) return { qualifying: ranked, subThreshold: [] };
+): { ranked: RankedModel[]; excluded: { model: RoutableModel; reason: string }[] } {
+  if (ranked.length === 0) return { ranked: [], excluded: [] };
+
   const qualifying: RankedModel[] = [];
   const subThreshold: { model: RoutableModel; reason: string }[] = [];
+
   for (const r of ranked) {
-    if (r.score >= minScore) {
+    const bar = minScore ?? (r.defaultMinScoreKey !== undefined ? DEFAULT_MIN_SCORE_BY_BENCHMARK[r.defaultMinScoreKey] : undefined) ?? 0;
+    if (r.score >= bar) {
       qualifying.push(r);
     } else {
       subThreshold.push({
         model: r.model,
-        reason: `below the minScore quality bar (${r.scoreLabel} < required ${(minScore * 100).toFixed(0)}%)`,
+        reason:
+          minScore !== undefined
+            ? `below the minScore quality bar (${r.scoreLabel} < required ${(minScore * 100).toFixed(0)}%)`
+            : `below the default quality bar for this benchmark (${r.scoreLabel} < ${(bar * 100).toFixed(0)}%) — cheapest-among-comparably-capable is the default; set an explicit minScore in .modelglass/routing-rules.json for a different bar`,
       });
     }
   }
-  return { qualifying, subThreshold };
+
+  if (minScore === undefined && qualifying.length === 0) {
+    const fallback = [...ranked].sort((a, b) => {
+      const d = b.score - a.score;
+      return d !== 0 ? d : cheaperFirst(a.model, b.model);
+    });
+    return { ranked: fallback, excluded: [] };
+  }
+
+  qualifying.sort((a, b) => cheaperFirst(a.model, b.model));
+  return { ranked: qualifying, excluded: subThreshold };
 }
 
 /**
  * Shared shape for every "rank by a benchmark score, cheapest-first
  * tie-break" category (bug-fix, new-code-generation, library-aware feature
- * work). `pickScore` returns the score + label to use for one model, or
- * null if this model has no usable signal for this benchmark preference —
- * callers supply the specific benchmark id(s)/variant preference; this
- * function only owns the shared sort/exclude/unscore mechanics.
+ * work). `pickScore` returns the score + label + which
+ * `DEFAULT_MIN_SCORE_BY_BENCHMARK` entry applies (`defaultMinScoreKey`) to
+ * use for one model, or null if this model has no usable signal for this
+ * benchmark preference — callers supply the specific benchmark id(s)/variant
+ * preference; this function only owns the shared sort/exclude/unscore
+ * mechanics, delegating the actual bar logic to `applyQualityBar`.
  *
- * `minScore` (SCO-330) — see partitionByMinScore's header above.
+ * `minScore` (SCO-330) — see `applyQualityBar`'s header above.
  */
 function rankByBenchmark(
   category: TaskCategory,
   models: RoutableModel[],
-  pickScore: (m: RoutableModel) => { score: number; label: string } | null,
+  pickScore: (m: RoutableModel) => { score: number; label: string; defaultMinScoreKey: string } | null,
   minScore?: number,
 ): CategoryRanking {
   const ranked: RankedModel[] = [];
@@ -342,20 +441,17 @@ function rankByBenchmark(
       unscored.push(m);
       continue;
     }
-    ranked.push({ model: m, score: picked.score, scoreKind: "benchmark", scoreLabel: picked.label });
-  }
-
-  if (minScore === undefined) {
-    ranked.sort((a, b) => {
-      const d = b.score - a.score;
-      return d !== 0 ? d : cheaperFirst(a.model, b.model);
+    ranked.push({
+      model: m,
+      score: picked.score,
+      scoreKind: "benchmark",
+      scoreLabel: picked.label,
+      defaultMinScoreKey: picked.defaultMinScoreKey,
     });
-    return { category, ranked, excluded: [], unscored };
   }
 
-  const { qualifying, subThreshold } = partitionByMinScore(ranked, minScore);
-  qualifying.sort((a, b) => cheaperFirst(a.model, b.model));
-  return { category, ranked: qualifying, excluded: subThreshold, unscored };
+  const { ranked: finalRanked, excluded } = applyQualityBar(ranked, minScore);
+  return { category, ranked: finalRanked, excluded, unscored };
 }
 
 // --- 3.1 Bug-fix / debug ---------------------------------------------------
@@ -367,10 +463,14 @@ function rankByBenchmark(
 export function rankBugFix(models: RoutableModel[], minScore?: number): CategoryRanking {
   return rankByBenchmark("bug-fix", models, (m) => {
     const pro = benchmarkScore(m, "swe-bench-pro");
-    if (pro) return { score: pro.score, label: `SWE-bench Pro ${(pro.score * 100).toFixed(1)}%` };
+    if (pro) return { score: pro.score, label: `SWE-bench Pro ${(pro.score * 100).toFixed(1)}%`, defaultMinScoreKey: "swe-bench-pro" };
     const verified = benchmarkScore(m, "swe-bench-verified");
     if (verified) {
-      return { score: verified.score, label: `SWE-bench Verified ${(verified.score * 100).toFixed(1)}% (no Pro score available)` };
+      return {
+        score: verified.score,
+        label: `SWE-bench Verified ${(verified.score * 100).toFixed(1)}% (no Pro score available)`,
+        defaultMinScoreKey: "swe-bench-verified",
+      };
     }
     return null;
   }, minScore);
@@ -384,9 +484,15 @@ export function rankBugFix(models: RoutableModel[], minScore?: number): Category
 export function rankNewCodeGeneration(models: RoutableModel[], minScore?: number): CategoryRanking {
   return rankByBenchmark("new-code-generation", models, (m) => {
     const aider = benchmarkScore(m, "aider-polyglot");
-    if (aider) return { score: aider.score, label: `Aider Polyglot ${(aider.score * 100).toFixed(1)}%` };
+    if (aider) return { score: aider.score, label: `Aider Polyglot ${(aider.score * 100).toFixed(1)}%`, defaultMinScoreKey: "aider-polyglot" };
     const lcb = benchmarkScore(m, "livecodebench");
-    if (lcb) return { score: lcb.score, label: `LiveCodeBench ${(lcb.score * 100).toFixed(1)}% (no Aider Polyglot score available)` };
+    if (lcb) {
+      return {
+        score: lcb.score,
+        label: `LiveCodeBench ${(lcb.score * 100).toFixed(1)}% (no Aider Polyglot score available)`,
+        defaultMinScoreKey: "livecodebench",
+      };
+    }
     return null;
   }, minScore);
 }
@@ -416,6 +522,7 @@ export function rankTerminalCli(models: RoutableModel[], minScore?: number): Cat
         score: terminus2.score,
         scoreKind: "benchmark",
         scoreLabel: `Terminal-Bench 2.1 ${(terminus2.score * 100).toFixed(1)}% (Terminus 2 harness)`,
+        defaultMinScoreKey: "terminal-bench-2-1",
       });
     } else {
       excluded.push({
@@ -426,20 +533,12 @@ export function rankTerminalCli(models: RoutableModel[], minScore?: number): Cat
     }
   }
 
-  if (minScore === undefined) {
-    ranked.sort((a, b) => {
-      const d = b.score - a.score;
-      return d !== 0 ? d : cheaperFirst(a.model, b.model);
-    });
-    return { category: "terminal-cli", ranked, excluded, unscored };
-  }
-
-  // SCO-330: same minScore filter+resort as rankByBenchmark, reimplemented
-  // here (not routed through that function) because this category's
-  // harness-exclusion pass above already needs its own bespoke loop.
-  const { qualifying, subThreshold } = partitionByMinScore(ranked, minScore);
-  qualifying.sort((a, b) => cheaperFirst(a.model, b.model));
-  return { category: "terminal-cli", ranked: qualifying, excluded: [...excluded, ...subThreshold], unscored };
+  // SCO-330: same quality-bar mechanism as rankByBenchmark
+  // (applyQualityBar), called directly here (not routed through that
+  // function) because this category's harness-exclusion pass above already
+  // needs its own bespoke loop.
+  const { ranked: finalRanked, excluded: barExcluded } = applyQualityBar(ranked, minScore);
+  return { category: "terminal-cli", ranked: finalRanked, excluded: [...excluded, ...barExcluded], unscored };
 }
 
 // --- 3.4 Library/dependency-aware feature work -----------------------------
@@ -451,9 +550,17 @@ export function rankTerminalCli(models: RoutableModel[], minScore?: number): Cat
 export function rankLibraryAwareFeatureWork(models: RoutableModel[], minScore?: number): CategoryRanking {
   return rankByBenchmark("library-aware-feature-work", models, (m) => {
     const hard = benchmarkScore(m, "bigcodebench", "hard");
-    if (hard?.variant === "hard") return { score: hard.score, label: `BigCodeBench Hard ${(hard.score * 100).toFixed(1)}%` };
+    if (hard?.variant === "hard") {
+      return { score: hard.score, label: `BigCodeBench Hard ${(hard.score * 100).toFixed(1)}%`, defaultMinScoreKey: "bigcodebench" };
+    }
     const any = benchmarkScore(m, "bigcodebench");
-    if (any) return { score: any.score, label: `BigCodeBench ${any.variant ?? "?"} ${(any.score * 100).toFixed(1)}% (no Hard-variant score available)` };
+    if (any) {
+      return {
+        score: any.score,
+        label: `BigCodeBench ${any.variant ?? "?"} ${(any.score * 100).toFixed(1)}% (no Hard-variant score available)`,
+        defaultMinScoreKey: "bigcodebench",
+      };
+    }
     return null;
   }, minScore);
 }
@@ -510,9 +617,21 @@ export function rankRefactor(models: RoutableModel[], minScore?: number): Catego
   // test-gen/doc-gen/chat-explain/autocomplete from this fix entirely.
   const benchmarkRanking = rankByBenchmark("refactor", models, (m) => {
     const pro = benchmarkScore(m, "swe-bench-pro");
-    if (pro) return { score: pro.score, label: `SWE-bench Pro ${(pro.score * 100).toFixed(1)}% (imperfect proxy — measures bug-fix, not refactor)` };
+    if (pro) {
+      return {
+        score: pro.score,
+        label: `SWE-bench Pro ${(pro.score * 100).toFixed(1)}% (imperfect proxy — measures bug-fix, not refactor)`,
+        defaultMinScoreKey: "swe-bench-pro",
+      };
+    }
     const verified = benchmarkScore(m, "swe-bench-verified");
-    if (verified) return { score: verified.score, label: `SWE-bench Verified ${(verified.score * 100).toFixed(1)}% (imperfect proxy — measures bug-fix, not refactor)` };
+    if (verified) {
+      return {
+        score: verified.score,
+        label: `SWE-bench Verified ${(verified.score * 100).toFixed(1)}% (imperfect proxy — measures bug-fix, not refactor)`,
+        defaultMinScoreKey: "swe-bench-verified",
+      };
+    }
     return null;
   }, minScore);
   const capabilityRanking = rankByCapability("refactor", benchmarkRanking.unscored, "coding");
@@ -640,7 +759,11 @@ export type TaskCategory =
  * `minScore` (SCO-330) is forwarded only to the five benchmark-scored
  * categories — silently ignored for test-gen/doc-gen/chat-explain/
  * autocomplete, whose capability_profile rating scale (0-2) a 0-1 score
- * threshold can't meaningfully apply to. See partitionByMinScore's header.
+ * threshold can't meaningfully apply to (those four already achieve
+ * cheapest-among-the-top-rating-tier naturally, via cheaperFirst breaking
+ * the frequent exact ties a coarse 3-level scale produces — no separate
+ * default-bar mechanism needed there). See `applyQualityBar`'s header for
+ * the five categories that do get one.
  */
 export function rankModelsForCategory(
   models: RoutableModel[],

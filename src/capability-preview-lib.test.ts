@@ -201,7 +201,13 @@ describe("previewCombinedCapabilities", () => {
     // Adding Groq doesn't shrink zeroRoutable further than OpenAI alone already achieved.
     assert.equal(combined.zeroRoutable.length, openaiAlone.zeroRoutable.length);
     const bugFix = combined.categories.find((c) => c.category === "bug-fix")!;
-    assert.equal(bugFix.routableCount, 2); // both still rank, just no NEW category unlocked
+    // SCO-330 (default-flip): Weaker Groq's 0.3 falls below the default
+    // SWE-bench Pro bar (0.5), so it doesn't add a qualifying model to
+    // bug-fix even combined with OpenAI's -- routableCount stays at 1 (just
+    // Strong OpenAI), same as the point this test is making: adding Groq
+    // doesn't unlock anything new here, it just happens to now be visible
+    // as "didn't add a qualifier" rather than "added a non-competitive one."
+    assert.equal(bugFix.routableCount, 1);
   });
 
   test("fully-zero-coverage combined case: neither configured provider has any scoring signal, still zero across the board", () => {
