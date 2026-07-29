@@ -176,3 +176,20 @@ export async function promptForKey(
 export async function clearApiKey(context: vscode.ExtensionContext): Promise<void> {
   await context.secrets.delete(SECRET_KEY);
 }
+
+/**
+ * SCO-331 — a side-effect-free read: no provisioning network call, no
+ * `showWarningMessage`/`showInputBox` prompts, ever. `ensureApiKey` above is
+ * unsafe to call from `provideLanguageModelChatInformation` — vscode.lm can
+ * invoke that with `options.silent: true` for background model-list
+ * refreshes, and popping a dialog at an arbitrary background moment (as
+ * `ensureApiKey`'s failure paths do) would be a startling, unprompted UX.
+ * This is exactly what's needed there instead: read the key if one's
+ * already stored, return undefined otherwise, never provision or prompt.
+ * `provideLanguageModelChatResponse` (a genuinely user-initiated moment —
+ * the user chose to send a chat message) still uses the full `ensureApiKey`,
+ * matching every other command in this extension.
+ */
+export async function peekApiKey(context: vscode.ExtensionContext): Promise<string | undefined> {
+  return context.secrets.get(SECRET_KEY);
+}

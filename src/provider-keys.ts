@@ -19,6 +19,7 @@ import {
   previewCombinedCapabilities,
   summarizeCombinedCapabilityPreview,
   formatCategoryLines,
+  shortCoverageLabel,
 } from "./capability-preview-lib.js";
 import type { RoutableModel } from "./routing-engine.js";
 
@@ -119,6 +120,32 @@ async function showCapabilityPreview(
 }
 
 /**
+ * SCO-332 — best-effort feed fetch for annotating the provider QuickPick
+ * itself, BEFORE key entry, rather than only warning after (this card's
+ * settled design principle: never hide a zero-coverage option, surface the
+ * "why" as early as possible using data the engine already computes).
+ * Reuses the same `ensureApiKey`+`fetchRoutableModels` pair
+ * `showCapabilityPreview` below already calls post-key-entry — this just
+ * calls it a moment earlier. Never blocks or fails the picker: any error
+ * here (no Modelglass key, fetch failure) falls back to an empty pool,
+ * which `previewProviderCapabilities` already renders sensibly ("no models
+ * in the current feed" — see `shortCoverageLabel`), same graceful-degrade
+ * contract `showCapabilityPreview` already has.
+ */
+async function fetchModelsForPickerAnnotation(context: vscode.ExtensionContext): Promise<RoutableModel[]> {
+  const modelglassApiKey = await ensureApiKey(context);
+  if (!modelglassApiKey) return [];
+  try {
+    return await fetchRoutableModels(modelglassApiKey);
+  } catch (e) {
+    output.appendLine(
+      `[provider-keys] couldn't fetch the model feed to annotate the provider picker (${e instanceof Error ? e.message : String(e)}) — showing it unannotated this time.`,
+    );
+    return [];
+  }
+}
+
+/**
  * "Modelglass: Set Provider API Key" (SCO-232) — pick a supported provider,
  * enter its key, store it. If a different provider was already configured,
  * warns before replacing it (Starter's single-key invariant made visible to
@@ -126,13 +153,18 @@ async function showCapabilityPreview(
  */
 export async function promptAndSetProviderKey(context: vscode.ExtensionContext): Promise<void> {
   const existing = await getConfiguredProvider(context.secrets);
+  const allModels = await fetchModelsForPickerAnnotation(context);
 
   const picked = await vscode.window.showQuickPick(
-    SUPPORTED_PROVIDERS.map((p) => ({
-      label: PROVIDER_LABELS[p],
-      description: p === existing?.provider ? "(currently configured)" : undefined,
-      provider: p,
-    })),
+    SUPPORTED_PROVIDERS.map((p) => {
+      const coverage = shortCoverageLabel(previewProviderCapabilities(allModels, p));
+      const configuredNote = p === existing?.provider ? "(currently configured) — " : "";
+      return {
+        label: PROVIDER_LABELS[p],
+        description: `${configuredNote}${coverage}`,
+        provider: p,
+      };
+    }),
     { title: "Modelglass: Set Provider API Key — Choose a provider" },
   );
   if (!picked) return;
@@ -180,13 +212,18 @@ export async function promptAndSetProviderKey(context: vscode.ExtensionContext):
 export async function promptAndAddProviderKey(context: vscode.ExtensionContext): Promise<void> {
   const configured = await getConfiguredProviders(context.secrets);
   const configuredSet = new Set(configured.map((c) => c.provider));
+  const allModels = await fetchModelsForPickerAnnotation(context);
 
   const picked = await vscode.window.showQuickPick(
-    SUPPORTED_PROVIDERS.map((p) => ({
-      label: PROVIDER_LABELS[p],
-      description: configuredSet.has(p) ? "(already configured — this replaces its key)" : undefined,
-      provider: p,
-    })),
+    SUPPORTED_PROVIDERS.map((p) => {
+      const coverage = shortCoverageLabel(previewProviderCapabilities(allModels, p));
+      const configuredNote = configuredSet.has(p) ? "(already configured — this replaces its key) — " : "";
+      return {
+        label: PROVIDER_LABELS[p],
+        description: `${configuredNote}${coverage}`,
+        provider: p,
+      };
+    }),
     { title: "Modelglass: Add Provider API Key — Choose a provider" },
   );
   if (!picked) return;

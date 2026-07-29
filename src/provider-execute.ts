@@ -19,6 +19,33 @@ export type FailureKind =
   | "unsupported-provider"
   | "model-not-found";
 
+/**
+ * SCO-331 — multi-turn conversation support. Every caller before this card
+ * only ever sent one flattened user turn (Run Task has no conversation
+ * memory at all), so `prompt` being a bare `string` was sufficient. The
+ * vscode.lm chat surface hands this adapter a FULL conversation on every
+ * call (system/user/assistant turns already interleaved by VS Code), which
+ * a single string can't represent without losing role information.
+ *
+ * `prompt` widens to `string | ChatMessage[]` rather than becoming
+ * `ChatMessage[]`-only, specifically so every existing call site (Run
+ * Task's one-shot flow, and every existing test in this file and
+ * run-task.test.ts) keeps compiling and passing completely unchanged --
+ * `toMessages()` below normalises a bare string to the exact one-element
+ * array those call sites already produced implicitly, so behavior for them
+ * is provably identical, not just "probably fine."
+ */
+export type ChatRole = "system" | "user" | "assistant";
+
+export interface ChatMessage {
+  role: ChatRole;
+  content: string;
+}
+
+function toMessages(prompt: string | ChatMessage[]): ChatMessage[] {
+  return typeof prompt === "string" ? [{ role: "user", content: prompt }] : prompt;
+}
+
 export class ProviderExecutionError extends Error {
   readonly kind: FailureKind;
   readonly provider: string;
@@ -182,7 +209,7 @@ async function executeOpenAiCompatible(
   config: OpenAiCompatibleConfig,
   apiKey: string,
   modelId: string,
-  prompt: string,
+  prompt: string | ChatMessage[],
   timeoutMs: number,
 ): Promise<ExecuteResult> {
   const controller = new AbortController();
@@ -197,7 +224,10 @@ async function executeOpenAiCompatible(
       },
       body: JSON.stringify({
         model: modelId,
-        messages: [{ role: "user", content: prompt }],
+        // OpenAI-compatible chat/completions accepts system/user/assistant
+        // roles directly in one array -- no per-provider translation needed
+        // here, unlike Anthropic below.
+        messages: toMessages(prompt),
       }),
       signal: controller.signal,
     });
@@ -248,11 +278,26 @@ async function executeOpenAiCompatible(
 async function executeAnthropic(
   apiKey: string,
   modelId: string,
-  prompt: string,
+  prompt: string | ChatMessage[],
   timeoutMs: number,
 ): Promise<ExecuteResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // SCO-331 -- unlike the OpenAI-compatible adapter, Anthropic's Messages API
+  // doesn't accept a "system" role inside the messages array at all; it's a
+  // separate top-level `system` string. Every prior caller only ever sent a
+  // single user turn, so this split was never needed until the vscode.lm
+  // surface started forwarding real conversations (which can include a
+  // system turn). Multiple system messages (unusual, but not prevented by
+  // the type) are joined -- Anthropic's `system` field is a single string.
+  const allMessages = toMessages(prompt);
+  const systemText = allMessages
+    .filter((m) => m.role === "system")
+    .map((m) => m.content)
+    .join("\n\n");
+  const conversationMessages = allMessages
+    .filter((m): m is ChatMessage & { role: "user" | "assistant" } => m.role !== "system")
+    .map((m) => ({ role: m.role, content: m.content }));
   let response: Response;
   try {
     response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -273,7 +318,8 @@ async function executeAnthropic(
         // parsing below), not just "make the cap high enough to rarely
         // matter."
         max_tokens: 8192,
-        messages: [{ role: "user", content: prompt }],
+        ...(systemText ? { system: systemText } : {}),
+        messages: conversationMessages,
       }),
       signal: controller.signal,
     });
@@ -325,7 +371,7 @@ export async function executeProviderCall(
   provider: SupportedProvider,
   apiKey: string,
   modelId: string,
-  prompt: string,
+  prompt: string | ChatMessage[],
   timeoutMs: number = DEFAULT_PROVIDER_TIMEOUT_MS,
   explicitProviderModelId?: string,
 ): Promise<ExecuteResult> {

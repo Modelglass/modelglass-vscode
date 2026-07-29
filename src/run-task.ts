@@ -17,6 +17,7 @@ import {
 import { loadRoutingRules } from "./routing-rules.js";
 import { checkProAccess, isGateSatisfied, proGatedValue, selectProvidersForRun } from "./pro-gate-lib.js";
 import { promptUpgradeToPro } from "./pro-gate.js";
+import { previewCombinedCapabilities, INDUSTRY_WIDE_GAP_NOTE, type CategoryPreview } from "./capability-preview-lib.js";
 
 /**
  * SCO-232 — vscode-coupled command: "Modelglass: Run Task on Cheapest
@@ -68,9 +69,33 @@ function captureEditorContext(): EditorContext | undefined {
   };
 }
 
-async function promptForCategory(): Promise<LeafTaskCategory | undefined> {
+/**
+ * SCO-332 — `coverage`, when supplied, annotates each category with how many
+ * of the user's CURRENTLY CONFIGURED providers' models actually rank for it
+ * (mirroring `routeAndExecuteWithFallback`'s own combined-pool computation,
+ * via `previewCombinedCapabilities`), plus the industry-wide-gap note for
+ * categories like library-aware-feature-work that are empty for everyone,
+ * not just this user. This is the same annotation the Output-channel
+ * preview and the setup-time provider picker already show, surfaced here
+ * too, at the actual moment of choice — not a fourth independent
+ * computation. `coverage` is optional (undefined when the pre-fetch failed)
+ * so a data-fetch problem degrades to the original unannotated picker
+ * rather than blocking category selection entirely.
+ */
+async function promptForCategory(coverage?: CategoryPreview[]): Promise<LeafTaskCategory | undefined> {
+  const byCategory = new Map(coverage?.map((c) => [c.category, c]));
   const picked = await vscode.window.showQuickPick(
-    LEAF_CATEGORIES.map((category) => ({ label: CATEGORY_LABELS[category], category })),
+    LEAF_CATEGORIES.map((category) => {
+      const preview = byCategory.get(category);
+      const gapNote = INDUSTRY_WIDE_GAP_NOTE[category];
+      const description =
+        preview === undefined
+          ? undefined
+          : preview.routableCount > 0
+            ? `${preview.routableCount} model(s) routable today`
+            : `no routable model today${gapNote ? ` — ${gapNote}` : ""}`;
+      return { label: CATEGORY_LABELS[category], description, category };
+    }),
     { title: "Modelglass: Run Task — Task Category" },
   );
   return picked?.category;
@@ -95,7 +120,33 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
   // the user was looking at when they ran this command."
   const editorContext = captureEditorContext();
 
-  const category = await promptForCategory();
+  // SCO-332 — moved earlier than before (this used to happen only inside the
+  // withProgress block below, after category/prompt were already chosen) so
+  // the category QuickPick can be annotated with real routability data
+  // before the user picks. Best-effort: any failure here just means an
+  // unannotated picker (`coverage` stays undefined) and a normal re-fetch
+  // attempt later, not a blocked command — fetchRoutableModels' own 5-minute
+  // cache means this earlier call doesn't cost a second network round trip
+  // once the later one runs.
+  const modelglassApiKey = await ensureApiKey(context);
+  if (!modelglassApiKey) return; // free Modelglass key is for reading pricing/benchmark data, distinct from the provider key(s) above
+
+  let preFetchedModels: RoutableModel[] | undefined;
+  try {
+    preFetchedModels = await fetchRoutableModels(modelglassApiKey, undefined, undefined, (message) =>
+      output.appendLine(`[run-task] ${message}`),
+    );
+  } catch {
+    // Swallowed here, not surfaced — the withProgress block below re-attempts
+    // the same fetch and reports any failure there, where an error message is
+    // actually appropriate context (mid-command, not mid-picker).
+  }
+
+  const coverage = preFetchedModels
+    ? previewCombinedCapabilities(preFetchedModels, configuredProviders.map((c) => c.provider)).categories
+    : undefined;
+
+  const category = await promptForCategory(coverage);
   if (!category) return;
 
   const prompt = await vscode.window.showInputBox({
@@ -109,17 +160,16 @@ export async function runTask(context: vscode.ExtensionContext): Promise<void> {
 
   const taskPrompt = buildTaskPrompt(prompt.trim(), editorContext);
 
-  const modelglassApiKey = await ensureApiKey(context);
-  if (!modelglassApiKey) return; // free Modelglass key is for reading pricing/benchmark data, distinct from the provider key(s) above
-
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Modelglass: routing and running your task…" },
     async () => {
       let allModels: RoutableModel[];
       try {
-        allModels = await fetchRoutableModels(modelglassApiKey, undefined, undefined, (message) =>
-          output.appendLine(`[run-task] ${message}`),
-        );
+        allModels =
+          preFetchedModels ??
+          (await fetchRoutableModels(modelglassApiKey, undefined, undefined, (message) =>
+            output.appendLine(`[run-task] ${message}`),
+          ));
       } catch (e) {
         vscode.window.showErrorMessage(
           `Modelglass: couldn't fetch model data (${e instanceof Error ? e.message : String(e)}).`,

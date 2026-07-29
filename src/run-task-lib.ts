@@ -4,7 +4,7 @@ import {
   type LeafTaskCategory,
   type RoutableModel,
 } from "./routing-engine.js";
-import { executeProviderCall, ProviderExecutionError, type ExecuteResult } from "./provider-execute.js";
+import { executeProviderCall, ProviderExecutionError, type ChatMessage, type ExecuteResult } from "./provider-execute.js";
 import type { SupportedProvider } from "./provider-keys-lib.js";
 import { resolveCategoryRanking, type RoutingRule } from "./routing-rules-lib.js";
 
@@ -188,7 +188,13 @@ export type ExecuteFn = (
   provider: SupportedProvider,
   apiKey: string,
   modelId: string,
-  prompt: string,
+  /** SCO-331 -- widened from `string` to also accept a full conversation
+   *  (`ChatMessage[]`), for the vscode.lm chat surface, which forwards real
+   *  multi-turn history. Every pre-existing caller (Run Task) still passes
+   *  a plain `string`; `provider-execute.ts`'s `toMessages()` normalises
+   *  that to the exact one-element array it always produced implicitly, so
+   *  behavior for those callers is unchanged. */
+  prompt: string | ChatMessage[],
   timeoutMs?: number,
   /** SCO-283: the ranked model's own RoutableModel.providerModelId, when set. */
   explicitProviderModelId?: string,
@@ -260,7 +266,7 @@ export async function routeAndExecuteWithFallback(
   allModels: RoutableModel[],
   configuredProviders: ConfiguredProviderKey[],
   category: LeafTaskCategory,
-  prompt: string,
+  prompt: string | ChatMessage[],
   executeFn: ExecuteFn = executeProviderCall,
   rule?: RoutingRule,
   /**
@@ -372,7 +378,7 @@ export async function routeAndExecute(
   provider: SupportedProvider,
   providerApiKey: string,
   category: LeafTaskCategory,
-  prompt: string,
+  prompt: string | ChatMessage[],
   executeFn: ExecuteFn = executeProviderCall,
   rule?: RoutingRule,
   excludeModelIds?: ReadonlySet<string>,

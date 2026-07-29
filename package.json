@@ -2,7 +2,7 @@
   "name": "cost-aware-router",
   "displayName": "Modelglass Cost-Aware Router",
   "description": "Route dev tasks to the cheapest capable LLM using the live Modelglass pricing feed — and execute them directly against your own provider key (BYOK), no proxy.",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "publisher": "modelglass",
   "license": "MIT",
   "type": "module",
@@ -16,7 +16,7 @@
   },
   "homepage": "https://github.com/Modelglass/modelglass-vscode#readme",
   "engines": {
-    "vscode": "^1.85.0",
+    "vscode": "^1.104.0",
     "node": ">=20"
   },
   "categories": ["Other", "Machine Learning"],
@@ -49,6 +49,12 @@
         "command": "modelglass.addProviderKey",
         "title": "Modelglass: Add Provider API Key"
       }
+    ],
+    "languageModelChatProviders": [
+      {
+        "vendor": "modelglass",
+        "displayName": "Modelglass Router"
+      }
     ]
   },
   "scripts": {
@@ -61,7 +67,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "@types/vscode": "^1.85.0",
+    "@types/vscode": "^1.104.0",
     "@vscode/vsce": "^3.2.0",
     "esbuild": "^0.24.0",
     "tsx": "^4.19.0",
