@@ -5,7 +5,15 @@ import { checkProAccess, isFreeTierExcluded, isGateSatisfied, proGatedValue, sel
 import { loadRoutingRules } from "./routing-rules.js";
 import { CATEGORY_LABELS, fetchRoutableModels, routeAndExecuteWithFallback } from "./run-task-lib.js";
 import { describeChatOutcome, toChatMessages } from "./lm-provider-lib.js";
-import { CHAT_VIEW_ID, generateNonce, getWebviewHtml, parseChatSendMessage, type ChatResponseMessage } from "./chat-view-lib.js";
+import {
+  CHAT_HISTORY_STATE_KEY,
+  CHAT_VIEW_ID,
+  generateNonce,
+  getWebviewHtml,
+  parseChatSendMessage,
+  parseMessageHistory,
+  type ChatResponseMessage,
+} from "./chat-view-lib.js";
 import type { RoutableModel } from "./routing-engine.js";
 import type { SupportedProvider } from "./provider-keys-lib.js";
 
@@ -31,6 +39,17 @@ import type { SupportedProvider } from "./provider-keys-lib.js";
  * *within* an already-permitted call (single-provider Starter vs.
  * multi-provider Pro). Applying it here, not left for a later pass, per
  * this card's explicit "don't leave it ungated by default" requirement.
+ *
+ * SCO-380: conversation history persists via `context.workspaceState`, not
+ * `retainContextWhenHidden`/webview `getState()`/`setState()` — see
+ * chat-view-lib.ts's `getWebviewHtml` header for the full reasoning.
+ * Persisted per-workspace (not `globalState`): a coding chat's context is
+ * naturally tied to the project it happened in, and a global store would
+ * bleed one project's conversation into every other project's panel.
+ * Written twice per send — immediately after parsing (matching what the
+ * webview already shows optimistically, so a reload right after any
+ * early-exit error below still keeps the user's own message) and again
+ * with the assistant's reply appended, only on success.
  */
 export class ModelglassChatViewProvider implements vscode.WebviewViewProvider {
   constructor(private readonly context: vscode.ExtensionContext) {}
@@ -39,7 +58,8 @@ export class ModelglassChatViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.options = {
       enableScripts: true,
     };
-    webviewView.webview.html = getWebviewHtml(webviewView.webview.cspSource, generateNonce());
+    const persistedMessages = parseMessageHistory(this.context.workspaceState.get(CHAT_HISTORY_STATE_KEY));
+    webviewView.webview.html = getWebviewHtml(webviewView.webview.cspSource, generateNonce(), persistedMessages);
 
     webviewView.webview.onDidReceiveMessage((raw: unknown) => {
       void this.handleChatSendMessage(webviewView.webview, raw);
@@ -54,6 +74,12 @@ export class ModelglassChatViewProvider implements vscode.WebviewViewProvider {
     }
     const { category, messages } = parsed;
     const categoryLabel = CATEGORY_LABELS[category];
+
+    // SCO-380 — persist the user's own message immediately, before any of
+    // the gating/routing branches below (several of which return early
+    // with no further response). Re-written with the assistant's reply
+    // appended on success, further down.
+    await this.context.workspaceState.update(CHAT_HISTORY_STATE_KEY, messages);
 
     const configuredProviders = await getConfiguredProviders(this.context.secrets);
     if (configuredProviders.length === 0) {
@@ -119,6 +145,12 @@ export class ModelglassChatViewProvider implements vscode.WebviewViewProvider {
     );
 
     const result = describeChatOutcome(outcome, categoryLabel);
+    if (result.kind === "success") {
+      await this.context.workspaceState.update(CHAT_HISTORY_STATE_KEY, [
+        ...messages,
+        { role: "assistant", text: result.text },
+      ]);
+    }
     webview.postMessage({ type: "chatResponse", kind: result.kind, text: result.text } satisfies ChatResponseMessage);
   }
 }
