@@ -7,6 +7,7 @@ import { switchCheck } from "./switch-check.js";
 import { promptAndSetProviderKey, promptAndAddProviderKey, promptAndClearProviderKey } from "./provider-keys.js";
 import { runTask } from "./run-task.js";
 import { registerModelglassChatProvider } from "./lm-provider.js";
+import { registerModelglassChatView } from "./chat-view.js";
 
 export function activate(context: vscode.ExtensionContext): void {
   // SCO-331 -- registers separately from the command subscriptions below
@@ -14,6 +15,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // try/catch-guarded so an older VS Code or a registration failure never
   // blocks the commands that follow).
   registerModelglassChatProvider(context);
+
+  // SCO-377 -- same reasoning: the standalone chat sidebar view manages its
+  // own subscription and must never block the commands that follow it.
+  registerModelglassChatView(context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("modelglass.routeTask", async () => {

@@ -55,7 +55,25 @@
         "vendor": "modelglass",
         "displayName": "Modelglass Router"
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "modelglass-chat-container",
+          "title": "Modelglass Chat",
+          "icon": "icons/chat-view.svg"
+        }
+      ]
+    },
+    "views": {
+      "modelglass-chat-container": [
+        {
+          "id": "modelglass.chatView",
+          "name": "Modelglass Chat",
+          "type": "webview"
+        }
+      ]
+    }
   },
   "scripts": {
     "build": "node esbuild.js",
