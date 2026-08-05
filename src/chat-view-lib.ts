@@ -27,6 +27,12 @@ import type { ChatOutcome, MinimalChatMessage } from "./lm-provider-lib.js";
 export const CHAT_VIEW_CONTAINER_ID = "modelglass-chat-container";
 export const CHAT_VIEW_ID = "modelglass.chatView";
 
+/** SCO-380 — the `context.workspaceState` key conversation history is
+ *  persisted under. Defined here (pure) rather than inline in
+ *  chat-view.ts's vscode-coupled calls so it's a single source of truth,
+ *  same reasoning as CHAT_VIEW_ID above. */
+export const CHAT_HISTORY_STATE_KEY = "modelglass.chatHistory";
+
 // ---------------------------------------------------------------------------
 // Message contract (webview <-> extension host).
 // ---------------------------------------------------------------------------
@@ -51,6 +57,19 @@ export type ParsedChatSendMessage =
   | { valid: true; category: LeafTaskCategory; messages: MinimalChatMessage[] }
   | { valid: false; error: string };
 
+/** Whether `value` is a well-formed `MinimalChatMessage` — only "user"/
+ *  "assistant" roles, a string `text`. Shared by `parseChatSendMessage`
+ *  (the webview->host boundary) and `parseMessageHistory` (SCO-380, the
+ *  workspaceState->webview boundary) — one validation rule for "is this a
+ *  real message", not two copies that could drift. */
+export function isValidMinimalChatMessage(value: unknown): value is MinimalChatMessage {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  const hasValidRole = entry.role === "user" || entry.role === "assistant";
+  const hasValidText = typeof entry.text === "string";
+  return hasValidRole && hasValidText;
+}
+
 /**
  * Defensive parsing at the webview->host boundary — `onDidReceiveMessage`'s
  * payload is untyped (`any`) from VS Code's own API, so nothing about its
@@ -74,18 +93,45 @@ export function parseChatSendMessage(raw: unknown): ParsedChatSendMessage {
   }
   const messages: MinimalChatMessage[] = [];
   for (const m of msg.messages) {
-    if (typeof m !== "object" || m === null) {
+    if (!isValidMinimalChatMessage(m)) {
       return { valid: false, error: "malformed message entry (expected {role, text})." };
     }
-    const entry = m as Record<string, unknown>;
-    const hasValidRole = entry.role === "user" || entry.role === "assistant";
-    const hasValidText = typeof entry.text === "string";
-    if (!hasValidRole || !hasValidText) {
-      return { valid: false, error: "malformed message entry (expected {role, text})." };
-    }
-    messages.push(m as MinimalChatMessage);
+    messages.push(m);
   }
   return { valid: true, category: msg.category as LeafTaskCategory, messages };
+}
+
+/**
+ * SCO-380 — sanitises whatever `context.workspaceState.get(CHAT_HISTORY_STATE_KEY)`
+ * returns before it's trusted to seed a fresh webview render. This key has
+ * never held any other shape (a new feature, not a migration), but
+ * `workspaceState` is untyped storage VS Code doesn't validate on read —
+ * defensive by the same principle as `parseChatSendMessage`, not because a
+ * specific corruption path is known. Returns an empty array (never throws)
+ * for anything that isn't cleanly an array of valid messages, so a
+ * corrupted value degrades to "start fresh" rather than crashing the view.
+ */
+export function parseMessageHistory(raw: unknown): MinimalChatMessage[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.every(isValidMinimalChatMessage) ? raw : [];
+}
+
+/**
+ * SCO-380 — persisted history gets embedded into the generated HTML as a
+ * JSON literal inside an inline `<script>` (see `getWebviewHtml`). A
+ * message whose text happens to contain the literal substring `</script>`
+ * (or `</SCRIPT>`, case-insensitively — HTML tag matching isn't
+ * case-sensitive) would otherwise prematurely close that tag when the HTML
+ * parser processes it, before the JS engine ever sees the JSON — a classic
+ * script-embedding bug, not XSS exactly (no execution risk here, that's
+ * what `.textContent` in the render path already prevents) but a real
+ * render/parse corruption risk. Standard mitigation: escape `</` to `<\/`
+ * in the JSON text — `<\/script>` is valid inside a JS string literal
+ * (the backslash is simply redundant there) but the HTML parser no longer
+ * reads it as a closing tag.
+ */
+export function escapeForInlineScript(json: string): string {
+  return json.replace(/<\//gi, "<\\/");
 }
 
 /** The default pre-selected category in SCO-379's dropdown — "chat-explain"
@@ -154,34 +200,54 @@ export function generateNonce(): string {
  * SCO-379: real category picker (a plain `<select>` built from
  * `categoryOptions()`, not SCO-331's 9-pseudo-model workaround — a webview
  * isn't shape-constrained the way vscode.lm's picker is) and real
- * conversation-history rendering. The in-memory `conversation` array is
- * kept in the webview's own JS closure, not this module — deliberately NOT
- * persisted across a hide/show or reload (that's SCO-380); a fresh
- * `resolveWebviewView` call (and therefore a fresh script evaluation)
- * starts empty every time. Every send posts the FULL accumulated
- * conversation, not just the latest turn (matching this card's own
+ * conversation-history rendering. Every send posts the FULL accumulated
+ * conversation, not just the latest turn (matching that card's own
  * description: "message list, sent alongside category in each postMessage
  * payload") — `ChatSendMessage.messages` already typed as an array in
  * SCO-378 specifically so this needed no contract change.
+ *
+ * SCO-380: `persistedMessages` seeds the webview's `conversation` array and
+ * renders each one at load, instead of always starting empty. Without
+ * this, VS Code's own default `WebviewView` behavior already loses
+ * conversation state on a routine Activity Bar switch, not just a full
+ * restart — hiding a `WebviewView` (retainContextWhenHidden left at its
+ * SCO-377 default of false) deallocates and recreates its underlying
+ * document, tearing down this exact JS closure, every time. `chat-view.ts`
+ * reads/writes `persistedMessages` via `context.workspaceState` — chosen
+ * over `retainContextWhenHidden: true` (keeps the memory cost VS Code's
+ * own docs warn about, and still wouldn't survive a real restart) and over
+ * the webview-side `getState()`/`setState()` API (survives hide/show, but
+ * not a restart either, and isn't wired to any extension-host persistence
+ * for `WebviewView` the way it partially is for `WebviewPanel`).
+ * `workspaceState` alone covers both cases this card's "across panel
+ * reloads" wording actually implies, with no in-memory cost while hidden.
  *
  * Message bubbles are built via `document.createElement`/`.textContent`,
  * not raw HTML string concatenation — sidesteps needing a manual
  * HTML-escaping function entirely (a model's response could contain
  * arbitrary text, including HTML-like content) rather than hand-rolling
- * escaping in inline script text, which is easy to get subtly wrong.
+ * escaping in inline script text, which is easy to get subtly wrong. The
+ * one place raw text IS embedded as markup is the JSON seed for
+ * `persistedMessages` itself, inside the `<script>` tag — `escapeForInlineScript`
+ * (above) guards that specific spot.
  *
  * Error responses are shown in a separate area, not appended to the
  * conversation array — an error string isn't a real assistant turn, and
  * sending it back as one on the next round-trip would corrupt what the
- * model actually said.
+ * model actually said. `chat-view.ts` mirrors this on the persistence
+ * side: it writes the user's own message to workspaceState immediately
+ * (matching what the webview already shows optimistically), then
+ * re-writes with the assistant's reply appended only on success — an
+ * error leaves that correct partial state as final.
  */
-export function getWebviewHtml(cspSource: string, nonce: string): string {
+export function getWebviewHtml(cspSource: string, nonce: string, persistedMessages: MinimalChatMessage[] = []): string {
   const optionsHtml = categoryOptions()
     .map(
       (opt) =>
         `<option value="${opt.value}"${opt.value === DEFAULT_CHAT_CATEGORY ? " selected" : ""}>${opt.label}</option>`,
     )
     .join("");
+  const persistedMessagesJson = escapeForInlineScript(JSON.stringify(persistedMessages));
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -302,10 +368,13 @@ export function getWebviewHtml(cspSource: string, nonce: string): string {
     const input = document.getElementById("modelglass-chat-input");
     const sendButton = document.getElementById("modelglass-chat-send");
 
-    // In-memory only, per this card's scope — a fresh script evaluation
-    // (webview reload/re-show) starts this empty again. Persisting it
-    // across that is SCO-380.
-    let conversation = [];
+    // SCO-380: seeded from persisted history the host looked up
+    // (chat-view.ts), not always empty — a fresh script evaluation
+    // (webview reload/re-show) now rehydrates instead of starting over.
+    let conversation = ${persistedMessagesJson};
+    for (const message of conversation) {
+      appendMessageToDom(message);
+    }
 
     function setControlsEnabled(enabled) {
       sendButton.disabled = !enabled;

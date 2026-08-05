@@ -1,24 +1,29 @@
 /**
- * SCO-377/SCO-378/SCO-379 — tests for the standalone chat webview's pure
- * half: the HTML shell (SCO-377), the message contract (SCO-378), and the
- * category picker + conversation-rendering logic (SCO-379). No vscode API
- * involved, same "test the -lib.ts, not the vscode-coupled wrapper"
- * convention as pro-gate-lib.test.ts / lm-provider-lib.test.ts.
+ * SCO-377/SCO-378/SCO-379/SCO-380 — tests for the standalone chat webview's
+ * pure half: the HTML shell (SCO-377), the message contract (SCO-378), the
+ * category picker + conversation-rendering logic (SCO-379), and history
+ * persistence validation/embedding (SCO-380). No vscode API involved, same
+ * "test the -lib.ts, not the vscode-coupled wrapper" convention as
+ * pro-gate-lib.test.ts / lm-provider-lib.test.ts.
  */
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  CHAT_HISTORY_STATE_KEY,
   CHAT_VIEW_CONTAINER_ID,
   CHAT_VIEW_ID,
   DEFAULT_CHAT_CATEGORY,
   ROLE_LABELS,
   categoryLabelFor,
   categoryOptions,
+  escapeForInlineScript,
   generateNonce,
   getWebviewHtml,
+  isValidMinimalChatMessage,
   parseChatSendMessage,
+  parseMessageHistory,
 } from "./chat-view-lib.js";
 import { CATEGORY_LABELS, LEAF_CATEGORIES } from "./run-task-lib.js";
 
@@ -152,8 +157,39 @@ describe("getWebviewHtml", () => {
     assert.ok(!html.includes("innerHTML"));
   });
 
-  test("in-memory conversation state only — no persistence API referenced (SCO-380's scope)", () => {
+  test("no persistence API called from inside the webview itself — that's chat-view.ts's job (host-side workspaceState)", () => {
     assert.ok(!/getState|setState|localStorage|workspaceState/.test(html));
+  });
+
+  test("with no persisted messages (the default), conversation seeds empty and nothing is pre-rendered", () => {
+    assert.ok(html.includes("let conversation = [];"));
+  });
+});
+
+describe("getWebviewHtml — SCO-380 persisted-history seeding", () => {
+  const cspSource = "vscode-webview://abc123";
+  const nonce = generateNonce();
+  const persisted = [
+    { role: "user" as const, text: "earlier question" },
+    { role: "assistant" as const, text: "earlier answer" },
+  ];
+  const html = getWebviewHtml(cspSource, nonce, persisted);
+
+  test("seeds the conversation array from the persisted messages, not an empty array", () => {
+    assert.ok(html.includes(`let conversation = ${JSON.stringify(persisted)};`));
+  });
+
+  test("renders each persisted message at load via the same appendMessageToDom used for live sends", () => {
+    assert.match(html, /for \(const message of conversation\) \{\s*appendMessageToDom\(message\);\s*\}/);
+  });
+
+  test("escapes a </script>-containing message so it can't break out of the inline <script> tag", () => {
+    const dangerous = [{ role: "user" as const, text: "</script><script>alert(1)</script>" }];
+    const dangerousHtml = getWebviewHtml(cspSource, nonce, dangerous);
+    // the literal, unescaped sequence must never appear inside the seeded JSON
+    assert.ok(!dangerousHtml.includes('let conversation = [{"role":"user","text":"</script>'));
+    // the parser-safe escaped form must be present instead
+    assert.ok(dangerousHtml.includes("<\\/script>"));
   });
 });
 
@@ -251,5 +287,77 @@ describe("parseChatSendMessage", () => {
       const result = parseChatSendMessage({ ...validMessage, category });
       assert.equal(result.valid, true, `expected "${category}" to be accepted`);
     }
+  });
+});
+
+describe("isValidMinimalChatMessage", () => {
+  test("accepts well-formed user/assistant messages", () => {
+    assert.equal(isValidMinimalChatMessage({ role: "user", text: "hi" }), true);
+    assert.equal(isValidMinimalChatMessage({ role: "assistant", text: "hello" }), true);
+  });
+
+  test("rejects a system role — this contract deliberately excludes it", () => {
+    assert.equal(isValidMinimalChatMessage({ role: "system", text: "hi" }), false);
+  });
+
+  test("rejects non-string text, missing fields, and non-objects", () => {
+    assert.equal(isValidMinimalChatMessage({ role: "user", text: 123 }), false);
+    assert.equal(isValidMinimalChatMessage({ role: "user" }), false);
+    assert.equal(isValidMinimalChatMessage("hi"), false);
+    assert.equal(isValidMinimalChatMessage(null), false);
+    assert.equal(isValidMinimalChatMessage(undefined), false);
+  });
+});
+
+describe("parseMessageHistory — SCO-380 workspaceState read-side validation", () => {
+  test("returns a well-formed array unchanged", () => {
+    const history = [
+      { role: "user", text: "hi" },
+      { role: "assistant", text: "hello" },
+    ];
+    assert.deepEqual(parseMessageHistory(history), history);
+  });
+
+  test("returns an empty array for undefined (nothing persisted yet — the common case)", () => {
+    assert.deepEqual(parseMessageHistory(undefined), []);
+  });
+
+  test("returns an empty array for a non-array value, rather than throwing", () => {
+    assert.deepEqual(parseMessageHistory("not an array"), []);
+    assert.deepEqual(parseMessageHistory({ role: "user", text: "hi" }), []);
+    assert.deepEqual(parseMessageHistory(42), []);
+  });
+
+  test("returns an empty array if ANY entry is malformed — no partial/corrupted history rendered", () => {
+    const history = [{ role: "user", text: "hi" }, { role: "system", text: "bad" }];
+    assert.deepEqual(parseMessageHistory(history), []);
+  });
+
+  test("an empty persisted array round-trips to an empty array", () => {
+    assert.deepEqual(parseMessageHistory([]), []);
+  });
+});
+
+describe("escapeForInlineScript", () => {
+  test("escapes </script> so it can't prematurely close the enclosing <script> tag", () => {
+    const json = '{"text":"</script><script>alert(1)</script>"}';
+    const escaped = escapeForInlineScript(json);
+    assert.ok(!escaped.includes("</script>"));
+    assert.ok(escaped.includes("<\\/script>"));
+  });
+
+  test("is case-insensitive (HTML tag matching isn't case-sensitive)", () => {
+    assert.ok(!escapeForInlineScript('"</SCRIPT>"').includes("</SCRIPT>"));
+  });
+
+  test("leaves ordinary JSON with no closing-tag-like substrings untouched", () => {
+    const json = JSON.stringify({ role: "user", text: "just a normal message" });
+    assert.equal(escapeForInlineScript(json), json);
+  });
+});
+
+describe("CHAT_HISTORY_STATE_KEY", () => {
+  test("is a non-empty, namespaced key", () => {
+    assert.match(CHAT_HISTORY_STATE_KEY, /^modelglass\./);
   });
 });
