@@ -1,6 +1,7 @@
 /**
- * SCO-377/SCO-378 — tests for the standalone chat webview's pure half: the
- * HTML shell (SCO-377) and the message contract (SCO-378). No vscode API
+ * SCO-377/SCO-378/SCO-379 — tests for the standalone chat webview's pure
+ * half: the HTML shell (SCO-377), the message contract (SCO-378), and the
+ * category picker + conversation-rendering logic (SCO-379). No vscode API
  * involved, same "test the -lib.ts, not the vscode-coupled wrapper"
  * convention as pro-gate-lib.test.ts / lm-provider-lib.test.ts.
  */
@@ -12,11 +13,14 @@ import {
   CHAT_VIEW_CONTAINER_ID,
   CHAT_VIEW_ID,
   DEFAULT_CHAT_CATEGORY,
+  ROLE_LABELS,
   categoryLabelFor,
+  categoryOptions,
   generateNonce,
   getWebviewHtml,
   parseChatSendMessage,
 } from "./chat-view-lib.js";
+import { CATEGORY_LABELS, LEAF_CATEGORIES } from "./run-task-lib.js";
 
 describe("generateNonce", () => {
   test("returns a 32-character hex string", () => {
@@ -29,6 +33,39 @@ describe("generateNonce", () => {
     const a = generateNonce();
     const b = generateNonce();
     assert.notEqual(a, b);
+  });
+});
+
+describe("categoryOptions", () => {
+  test("returns exactly the 9 LeafTaskCategory values, in CATEGORY_LABELS order", () => {
+    const options = categoryOptions();
+    assert.equal(options.length, LEAF_CATEGORIES.length);
+    assert.deepEqual(
+      options.map((o) => o.value),
+      LEAF_CATEGORIES,
+    );
+  });
+
+  test("every option's label matches CATEGORY_LABELS", () => {
+    for (const option of categoryOptions()) {
+      assert.equal(option.label, CATEGORY_LABELS[option.value]);
+    }
+  });
+
+  test("includes the default category", () => {
+    const values = categoryOptions().map((o) => o.value);
+    assert.ok(values.includes(DEFAULT_CHAT_CATEGORY));
+  });
+});
+
+describe("ROLE_LABELS", () => {
+  test("covers exactly user and assistant, matching what parseChatSendMessage accepts", () => {
+    assert.deepEqual(Object.keys(ROLE_LABELS).sort(), ["assistant", "user"]);
+  });
+
+  test("neither label is empty", () => {
+    assert.ok(ROLE_LABELS.user.length > 0);
+    assert.ok(ROLE_LABELS.assistant.length > 0);
   });
 });
 
@@ -61,19 +98,25 @@ describe("getWebviewHtml", () => {
     assert.ok(html.includes("var(--vscode-editor-background)"));
   });
 
-  test("renders placeholder content, not real chat UI", () => {
-    assert.ok(html.includes("Modelglass Chat"));
-  });
-
-  // SCO-378 — the shell now actually wires postMessage/addEventListener.
   test("acquires the webview API handle", () => {
     assert.ok(html.includes("acquireVsCodeApi()"));
   });
 
-  test("sends a sendMessage postMessage carrying the default category", () => {
-    assert.ok(html.includes('type: "sendMessage"'));
-    assert.ok(html.includes(`category: "${DEFAULT_CHAT_CATEGORY}"`));
-    assert.ok(html.includes("vscodeApi.postMessage("));
+  test("renders a category <select> with all 9 options, default pre-selected", () => {
+    assert.match(html, /<select id="modelglass-chat-category">/);
+    for (const option of categoryOptions()) {
+      assert.ok(html.includes(`<option value="${option.value}"`), `missing option for ${option.value}`);
+      assert.ok(html.includes(`>${option.label}</option>`), `missing label for ${option.value}`);
+    }
+    assert.ok(html.includes(`<option value="${DEFAULT_CHAT_CATEGORY}" selected>`));
+  });
+
+  test("sends the SELECTED category (not a hardcoded literal) and the full accumulated conversation", () => {
+    assert.ok(html.includes("category: categorySelect.value"));
+    assert.ok(html.includes("messages: conversation"));
+    // the send payload must not hardcode a single-element array literal —
+    // that was SCO-378's placeholder shape, replaced here.
+    assert.ok(!html.includes('messages: [{ role: "user", text: text }]'));
   });
 
   test("listens for chatResponse messages from the host", () => {
@@ -81,10 +124,36 @@ describe("getWebviewHtml", () => {
     assert.ok(html.includes('message.type !== "chatResponse"'));
   });
 
-  test("has an input, send control, and output area — but no message-history rendering (SCO-379's job)", () => {
-    assert.ok(html.includes('id="modelglass-chat-input"'));
-    assert.ok(html.includes('id="modelglass-chat-send"'));
-    assert.ok(html.includes('id="modelglass-chat-output"'));
+  test("renders conversation history in a dedicated messages container, separate from the error area", () => {
+    assert.match(html, /<div id="modelglass-chat-messages">/);
+    assert.match(html, /<div id="modelglass-chat-error">/);
+    assert.ok(html.includes("appendMessageToDom("));
+  });
+
+  test("error responses are shown separately, not pushed into the conversation array", () => {
+    // the error branch must return before touching `conversation`
+    const errorBranchMatch = html.match(/if \(message\.kind === "error"\) \{[^}]*\}/);
+    assert.ok(errorBranchMatch, "expected an if(message.kind === 'error') branch");
+    assert.ok(!errorBranchMatch![0].includes("conversation.push"));
+  });
+
+  test("successful responses ARE pushed into the conversation array and rendered", () => {
+    assert.ok(html.includes('const assistantMessage = { role: "assistant"'));
+    assert.ok(html.includes("conversation.push(assistantMessage)"));
+    assert.ok(html.includes("appendMessageToDom(assistantMessage)"));
+  });
+
+  test("bakes ROLE_LABELS in as a JSON literal for the client script to read, not a duplicated hardcoded copy", () => {
+    assert.ok(html.includes(`const ROLE_LABELS = ${JSON.stringify(ROLE_LABELS)};`));
+  });
+
+  test("builds message bubbles via textContent, not raw innerHTML string concatenation", () => {
+    assert.ok(html.includes(".textContent = message.text"));
+    assert.ok(!html.includes("innerHTML"));
+  });
+
+  test("in-memory conversation state only — no persistence API referenced (SCO-380's scope)", () => {
+    assert.ok(!/getState|setState|localStorage|workspaceState/.test(html));
   });
 });
 
@@ -117,7 +186,7 @@ describe("parseChatSendMessage", () => {
     }
   });
 
-  test("accepts multiple messages (future multi-turn shape, even though the webview sends one today)", () => {
+  test("accepts a full multi-turn conversation history, as SCO-379's webview now sends on every send", () => {
     const result = parseChatSendMessage({
       type: "sendMessage",
       category: "chat-explain",
@@ -128,6 +197,7 @@ describe("parseChatSendMessage", () => {
       ],
     });
     assert.equal(result.valid, true);
+    if (result.valid) assert.equal(result.messages.length, 3);
   });
 
   test("rejects a non-object payload", () => {
@@ -176,8 +246,7 @@ describe("parseChatSendMessage", () => {
     assert.equal(result.valid, false);
   });
 
-  test("every value in LEAF_CATEGORIES round-trips through parseChatSendMessage", async () => {
-    const { LEAF_CATEGORIES } = await import("./run-task-lib.js");
+  test("every value in LEAF_CATEGORIES round-trips through parseChatSendMessage", () => {
     for (const category of LEAF_CATEGORIES) {
       const result = parseChatSendMessage({ ...validMessage, category });
       assert.equal(result.valid, true, `expected "${category}" to be accepted`);

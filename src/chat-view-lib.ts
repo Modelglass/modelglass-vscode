@@ -88,15 +88,46 @@ export function parseChatSendMessage(raw: unknown): ParsedChatSendMessage {
   return { valid: true, category: msg.category as LeafTaskCategory, messages };
 }
 
-/** The single hardcoded category the webview sends today — see this file's
- *  header for why (SCO-379 replaces this with a real picker). Exported so
- *  both the HTML template below and any test asserting on it read from one
- *  source, not a string literal duplicated in two places. */
+/** The default pre-selected category in SCO-379's dropdown — "chat-explain"
+ *  is the one LeafTaskCategory that fits a general-purpose chat box.
+ *  Exported so both the HTML template below and any test asserting on it
+ *  read from one source, not a string literal duplicated in two places. */
 export const DEFAULT_CHAT_CATEGORY: LeafTaskCategory = "chat-explain";
 
 export function categoryLabelFor(category: LeafTaskCategory): string {
   return CATEGORY_LABELS[category];
 }
+
+// ---------------------------------------------------------------------------
+// SCO-379 — category picker + conversation rendering, pure half.
+// ---------------------------------------------------------------------------
+
+export interface CategoryOption {
+  value: LeafTaskCategory;
+  label: string;
+}
+
+/** All 9 LeafTaskCategory values as {value, label} pairs, in
+ *  run-task-lib.ts's own CATEGORY_LABELS declaration order — the plain
+ *  `<select>` this card asks for, not SCO-331's 9-pseudo-model workaround
+ *  (a webview isn't constrained by vscode.lm's one-model-per-selectable-item
+ *  shape, per this card's own description). Pure and tested so a category
+ *  added/renamed in run-task-lib.ts is caught here rather than silently
+ *  missing from the dropdown. */
+export function categoryOptions(): CategoryOption[] {
+  return LEAF_CATEGORIES.map((value) => ({ value, label: CATEGORY_LABELS[value] }));
+}
+
+/** Only "user"/"assistant" — the only two roles parseChatSendMessage
+ *  accepts (this webview's contract deliberately excludes "system", even
+ *  though ChatRole itself has a third value; see parseChatSendMessage's
+ *  validation). Baked into the generated HTML as a JSON literal (below) so
+ *  the client-side render logic reads labels computed by tested TS, not a
+ *  second hardcoded copy inside the inline <script>. */
+export const ROLE_LABELS: Record<"user" | "assistant", string> = {
+  user: "You",
+  assistant: "Modelglass",
+};
 
 /** VS Code webview CSP requires a per-render nonce on any inline <script> —
  *  documented pattern in VS Code's own webview sample extension. 16 random
@@ -113,23 +144,45 @@ export function generateNonce(): string {
  * No external stylesheet/script files yet: everything's inline, matching
  * "bare shell" scope — a real webview-relative asset loading path (via
  * `webview.asWebviewUri`) is follow-on work once there's an actual asset to
- * load, not needed for a shell with no content beyond placeholder text.
+ * load, not needed for content this small.
  *
  * Styling uses VS Code's own theme CSS custom properties
  * (--vscode-foreground, --vscode-editor-background, etc.) rather than
  * hardcoded colors, so the panel matches the user's active theme
  * automatically — the same approach VS Code's official webview samples use.
  *
- * SCO-378: the inline script now actually sends/receives — `postMessage`
- * on submit (Enter or the Send button), `window.addEventListener("message",
- * ...)` for the host's response. Deliberately NOT conversation UI (SCO-379
- * owns that): one input, one output area, no message history rendered, no
- * category picker (every send uses `DEFAULT_CHAT_CATEGORY`). This exists so
- * the message-passing plumbing is actually exercisable end-to-end in a real
- * Extension Host, not just unit-tested in isolation — SCO-379 replaces this
- * whole markup block with real conversation UI, not just adds to it.
+ * SCO-379: real category picker (a plain `<select>` built from
+ * `categoryOptions()`, not SCO-331's 9-pseudo-model workaround — a webview
+ * isn't shape-constrained the way vscode.lm's picker is) and real
+ * conversation-history rendering. The in-memory `conversation` array is
+ * kept in the webview's own JS closure, not this module — deliberately NOT
+ * persisted across a hide/show or reload (that's SCO-380); a fresh
+ * `resolveWebviewView` call (and therefore a fresh script evaluation)
+ * starts empty every time. Every send posts the FULL accumulated
+ * conversation, not just the latest turn (matching this card's own
+ * description: "message list, sent alongside category in each postMessage
+ * payload") — `ChatSendMessage.messages` already typed as an array in
+ * SCO-378 specifically so this needed no contract change.
+ *
+ * Message bubbles are built via `document.createElement`/`.textContent`,
+ * not raw HTML string concatenation — sidesteps needing a manual
+ * HTML-escaping function entirely (a model's response could contain
+ * arbitrary text, including HTML-like content) rather than hand-rolling
+ * escaping in inline script text, which is easy to get subtly wrong.
+ *
+ * Error responses are shown in a separate area, not appended to the
+ * conversation array — an error string isn't a real assistant turn, and
+ * sending it back as one on the next round-trip would corrupt what the
+ * model actually said.
  */
 export function getWebviewHtml(cspSource: string, nonce: string): string {
+  const optionsHtml = categoryOptions()
+    .map(
+      (opt) =>
+        `<option value="${opt.value}"${opt.value === DEFAULT_CHAT_CATEGORY ? " selected" : ""}>${opt.label}</option>`,
+    )
+    .join("");
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -150,9 +203,43 @@ export function getWebviewHtml(cspSource: string, nonce: string): string {
       display: flex;
       flex-direction: column;
       gap: 8px;
+      height: calc(100vh - 24px);
     }
     #modelglass-chat-placeholder {
       color: var(--vscode-descriptionForeground);
+      margin: 0;
+    }
+    #modelglass-chat-category {
+      background-color: var(--vscode-dropdown-background);
+      color: var(--vscode-dropdown-foreground);
+      border: 1px solid var(--vscode-dropdown-border, transparent);
+      border-radius: 2px;
+      padding: 4px;
+      font-family: inherit;
+      font-size: inherit;
+    }
+    #modelglass-chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      border-top: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border));
+      padding-top: 8px;
+    }
+    .modelglass-message {
+      white-space: pre-wrap;
+    }
+    .modelglass-message .modelglass-message-role {
+      font-weight: 600;
+      font-size: 0.9em;
+      color: var(--vscode-descriptionForeground);
+    }
+    .modelglass-message-role-assistant {
+      background-color: var(--vscode-textBlockQuote-background);
+      border-left: 3px solid var(--vscode-textBlockQuote-border, var(--vscode-focusBorder));
+      padding: 6px 8px;
+      border-radius: 2px;
     }
     #modelglass-chat-input {
       width: 100%;
@@ -166,8 +253,12 @@ export function getWebviewHtml(cspSource: string, nonce: string): string {
       font-size: inherit;
       resize: vertical;
     }
+    #modelglass-chat-controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
     #modelglass-chat-send {
-      align-self: flex-end;
       background-color: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
       border: none;
@@ -175,43 +266,90 @@ export function getWebviewHtml(cspSource: string, nonce: string): string {
       padding: 4px 12px;
       cursor: pointer;
     }
-    #modelglass-chat-send:disabled {
+    #modelglass-chat-send:disabled,
+    #modelglass-chat-category:disabled,
+    #modelglass-chat-input:disabled {
       opacity: 0.6;
       cursor: default;
     }
-    #modelglass-chat-output {
-      white-space: pre-wrap;
-      border-top: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border));
-      padding-top: 8px;
-    }
-    #modelglass-chat-output.error {
+    #modelglass-chat-error {
       color: var(--vscode-errorForeground);
+      white-space: pre-wrap;
+      display: none;
+    }
+    #modelglass-chat-error.visible {
+      display: block;
     }
   </style>
 </head>
 <body>
   <div id="modelglass-chat-root">
-    <p id="modelglass-chat-placeholder">Modelglass Chat — SCO-378 message-passing test shell (real conversation UI lands in SCO-379).</p>
+    <p id="modelglass-chat-placeholder">Modelglass Chat</p>
+    <select id="modelglass-chat-category">${optionsHtml}</select>
+    <div id="modelglass-chat-messages"></div>
+    <div id="modelglass-chat-error"></div>
     <textarea id="modelglass-chat-input" rows="3" placeholder="Type a message…"></textarea>
-    <button id="modelglass-chat-send" type="button">Send</button>
-    <div id="modelglass-chat-output"></div>
+    <div id="modelglass-chat-controls">
+      <button id="modelglass-chat-send" type="button">Send</button>
+    </div>
   </div>
   <script nonce="${nonce}">
+    const ROLE_LABELS = ${JSON.stringify(ROLE_LABELS)};
     const vscodeApi = acquireVsCodeApi();
+    const categorySelect = document.getElementById("modelglass-chat-category");
+    const messagesEl = document.getElementById("modelglass-chat-messages");
+    const errorEl = document.getElementById("modelglass-chat-error");
     const input = document.getElementById("modelglass-chat-input");
     const sendButton = document.getElementById("modelglass-chat-send");
-    const output = document.getElementById("modelglass-chat-output");
+
+    // In-memory only, per this card's scope — a fresh script evaluation
+    // (webview reload/re-show) starts this empty again. Persisting it
+    // across that is SCO-380.
+    let conversation = [];
+
+    function setControlsEnabled(enabled) {
+      sendButton.disabled = !enabled;
+      categorySelect.disabled = !enabled;
+      input.disabled = !enabled;
+    }
+
+    function appendMessageToDom(message) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "modelglass-message modelglass-message-role-" + message.role;
+      const roleLabel = document.createElement("div");
+      roleLabel.className = "modelglass-message-role";
+      roleLabel.textContent = ROLE_LABELS[message.role] || message.role;
+      const body = document.createElement("div");
+      body.textContent = message.text;
+      wrapper.appendChild(roleLabel);
+      wrapper.appendChild(body);
+      messagesEl.appendChild(wrapper);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function showError(text) {
+      errorEl.textContent = text;
+      errorEl.classList.add("visible");
+    }
+
+    function clearError() {
+      errorEl.textContent = "";
+      errorEl.classList.remove("visible");
+    }
 
     function sendMessage() {
       const text = input.value.trim();
       if (!text) return;
-      sendButton.disabled = true;
-      output.classList.remove("error");
-      output.textContent = "Sending…";
+      clearError();
+      const userMessage = { role: "user", text: text };
+      conversation.push(userMessage);
+      appendMessageToDom(userMessage);
+      input.value = "";
+      setControlsEnabled(false);
       vscodeApi.postMessage({
         type: "sendMessage",
-        category: "${DEFAULT_CHAT_CATEGORY}",
-        messages: [{ role: "user", text: text }],
+        category: categorySelect.value,
+        messages: conversation,
       });
     }
 
@@ -226,9 +364,14 @@ export function getWebviewHtml(cspSource: string, nonce: string): string {
     window.addEventListener("message", (event) => {
       const message = event.data;
       if (!message || message.type !== "chatResponse") return;
-      sendButton.disabled = false;
-      output.classList.toggle("error", message.kind === "error");
-      output.textContent = message.text;
+      setControlsEnabled(true);
+      if (message.kind === "error") {
+        showError(message.text);
+        return;
+      }
+      const assistantMessage = { role: "assistant", text: message.text };
+      conversation.push(assistantMessage);
+      appendMessageToDom(assistantMessage);
     });
   </script>
 </body>
