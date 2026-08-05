@@ -135,6 +135,26 @@ export function isGateSatisfied(status: ProGateStatus): boolean {
   return status.reason === "network-error" || status.reason === "no-modelglass-key";
 }
 
+/**
+ * SCO-381 — the standalone chat panel's own product decision (recorded
+ * 2026-08-05): Starter and Pro get access, Free does not. This is a
+ * DIFFERENT axis from `isGateSatisfied` above: that function decides
+ * Pro-vs-not-Pro for a capability every tier can at least attempt (Run
+ * Task, single-provider); this one decides whether the whole feature is
+ * reachable at all, and Starter passes it while still being subject to
+ * `isGateSatisfied`'s narrower single-provider/no-rule-override ceiling
+ * once inside.
+ *
+ * Same fail-open philosophy as `isGateSatisfied` and for the same reason
+ * (a client-side UX gate, not a security boundary; wrongly blocking a
+ * paying user is worse than wrongly allowing an unverifiable one) — only a
+ * CONFIRMED "free" tier blocks. `network-error`/`invalid-key`/
+ * `no-modelglass-key` all pass through undecided rather than blocking.
+ */
+export function isFreeTierExcluded(status: ProGateStatus): boolean {
+  return !status.isPro && status.reason === "not-pro" && status.tier === "free";
+}
+
 /** Gates an already-resolved value: returns it unchanged when the gate is
  *  satisfied, otherwise undefined. Used for routing-rules.json (SCO-231) —
  *  a Starter user's rule is discarded here, falling through to SCO-230's

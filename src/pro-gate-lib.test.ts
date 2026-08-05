@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_PRO_GATE_TIMEOUT_MS,
   checkProAccess,
+  isFreeTierExcluded,
   isGateSatisfied,
   isProTierValue,
   proGatedValue,
@@ -197,6 +198,32 @@ describe("SCO-234 required case: Starter-tier user's routing-rules.json falls th
   test("proGatedValue is a no-op (still undefined) when there was no rule to begin with, regardless of tier", () => {
     assert.equal(proGatedValue({ isPro: true, tier: "pro" }, undefined), undefined);
     assert.equal(proGatedValue({ isPro: false, reason: "not-pro", tier: "starter" }, undefined), undefined);
+  });
+});
+
+describe("SCO-381: isFreeTierExcluded — standalone chat panel gates out Free, not Starter", () => {
+  test("a confirmed Free status is excluded", () => {
+    assert.equal(isFreeTierExcluded({ isPro: false, reason: "not-pro", tier: "free" }), true);
+  });
+
+  test("a confirmed Starter status is NOT excluded (Starter still passes this gate)", () => {
+    assert.equal(isFreeTierExcluded({ isPro: false, reason: "not-pro", tier: "starter" }), false);
+  });
+
+  test("a confirmed Pro status is NOT excluded", () => {
+    assert.equal(isFreeTierExcluded({ isPro: true, tier: "pro" }), false);
+  });
+
+  test("an unverifiable status (network error / no key / invalid key) fails OPEN, not excluded", () => {
+    assert.equal(isFreeTierExcluded({ isPro: false, reason: "network-error", message: "timeout" }), false);
+    assert.equal(isFreeTierExcluded({ isPro: false, reason: "no-modelglass-key" }), false);
+    assert.equal(isFreeTierExcluded({ isPro: false, reason: "invalid-key" }), false);
+  });
+
+  test("Starter passes isFreeTierExcluded but still hits isGateSatisfied's narrower single-provider ceiling", () => {
+    const starterStatus: ProGateStatus = { isPro: false, reason: "not-pro", tier: "starter" };
+    assert.equal(isFreeTierExcluded(starterStatus), false); // reaches the panel at all
+    assert.equal(isGateSatisfied(starterStatus), false); // but still capped to one provider, no rule override — same as Run Task today
   });
 });
 
