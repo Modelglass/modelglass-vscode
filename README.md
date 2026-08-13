@@ -5,6 +5,9 @@ confirmed benchmark bar, using the live [Modelglass](https://modelglass.com.au)
 pricing and capability feed. Since v0.3.0 it can also **execute the call
 directly against your own provider key** — a fully client-side, BYOK
 (bring-your-own-key) router: no Modelglass proxy in the request path, ever.
+**Since v0.6.0, it also generates video (via Runway) and audio (via
+ElevenLabs)** the same way — your own keys, no proxy — see **Generate
+Video**/**Generate Audio** in [Commands](#commands) below.
 
 ![Modelglass: Route Task recommendation](docs/screenshot.png)
 
