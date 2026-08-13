@@ -1,8 +1,8 @@
 {
   "name": "cost-aware-router",
   "displayName": "Modelglass Cost-Aware Router",
-  "description": "Route dev tasks to the cheapest capable LLM using the live Modelglass pricing feed — and execute them directly against your own provider key (BYOK), no proxy.",
-  "version": "0.6.0",
+  "description": "Route dev tasks to the cheapest capable LLM, and generate video (Runway) and audio (ElevenLabs) — all directly against your own provider keys (BYOK), no proxy — using the live Modelglass pricing feed.",
+  "version": "0.6.1",
   "publisher": "modelglass",
   "license": "MIT",
   "type": "module",
@@ -20,7 +20,7 @@
     "node": ">=20"
   },
   "categories": ["Other", "Machine Learning"],
-  "keywords": ["llm", "cost", "routing", "pricing", "ai"],
+  "keywords": ["llm", "cost", "routing", "pricing", "ai", "video", "audio"],
   "activationEvents": [],
   "main": "./dist/extension.cjs",
   "contributes": {
