@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1 — 2026-08-13
+
+Docs only, no functional change — 0.6.0 published to the Marketplace with
+its short description and README still describing LLM routing only. This
+release updates both to mention Generate Video (Runway) and Generate Audio
+(ElevenLabs), and adds `video`/`audio` to the Marketplace search keywords.
+
 ## 0.6.0 — 2026-08-13
 
 **The router now generates video and audio, not just LLM completions
