@@ -1,0 +1,292 @@
+/**
+ * SCO-430 — Runway execution adapter: async job-submit-and-poll (ADR-0012
+ * Amendment 2 Decision 1's second contract). vscode-free, directly
+ * unit-testable via monkey-patched global `fetch`, same convention as
+ * provider-execute.ts / media-execute-lib.ts.
+ *
+ * API shapes grounded directly against Runway's own Node SDK source
+ * (github.com/runwayml/sdk-node, checked 2026-08-13 — same "trace to a
+ * primary/vendor source, don't guess" bar this codebase's ADR/CONTRIBUTING
+ * conventions already hold registry data to):
+ *  - Base URL: https://api.dev.runwayml.com
+ *  - Headers: `Authorization: Bearer <key>`, `X-Runway-Version: 2024-11-06`,
+ *    `Content-Type: application/json` on POST bodies.
+ *  - Submit: POST /v1/{text_to_video|image_to_video|video_to_video} ->
+ *    `{ id: string }`.
+ *  - Poll: GET /v1/tasks/{id} -> `{ id, status, progress?, output?: string[],
+ *    failure?: string, failureCode?: string }`. Status enum: PENDING,
+ *    THROTTLED, RUNNING, SUCCEEDED, FAILED, CANCELLED (Runway's own
+ *    spelling — two Ls).
+ *  - Cancel: DELETE /v1/tasks/{id} -> void. Confirmed by ADR-0012 Amendment
+ *    3 item 1 against Runway's public API reference directly.
+ */
+
+import {
+  DEFAULT_MEDIA_CALL_TIMEOUT_MS,
+  DEFAULT_MEDIA_JOB_TIMEOUT_MS,
+  DEFAULT_POLL_INTERVAL_MS,
+  MediaExecutionError,
+  classifyMediaHttpFailure,
+  downloadMediaResult,
+  timedFetch,
+  type DownloadedResult,
+} from "./media-execute-lib.js";
+
+export const RUNWAY_BASE_URL = "https://api.dev.runwayml.com";
+export const RUNWAY_API_VERSION = "2024-11-06";
+
+export type RunwayEndpoint = "text_to_video" | "image_to_video" | "video_to_video";
+
+/** The three request-body shapes this adapter supports, one per endpoint —
+ *  matching Amendment 2 Decision 1's "which contract is a property of the
+ *  provider's integration, not a runtime choice" framing extended down to
+ *  endpoint-shape too: a caller picks the endpoint that matches the target
+ *  model's registry `model.modality` (image-to-video/text-to-video/
+ *  video-to-video), not a single "maybe has an image" params blob. */
+export interface RunwaySubmitParams {
+  model: string;
+  promptText: string;
+  ratio?: string;
+  duration?: number;
+  /** Required for image_to_video — a public URL or data URI, per Runway's
+   *  own `promptImage` field name. */
+  promptImage?: string;
+  /** Required for video_to_video (e.g. Aleph 2) — a public URL or data URI. */
+  videoUri?: string;
+  seed?: number;
+}
+
+interface RunwaySubmitResponse {
+  id: string;
+}
+
+function runwayHeaders(apiKey: string, extra?: Record<string, string>): Record<string, string> {
+  return {
+    authorization: `Bearer ${apiKey}`,
+    "x-runway-version": RUNWAY_API_VERSION,
+    ...extra,
+  };
+}
+
+function buildSubmitBody(endpoint: RunwayEndpoint, params: RunwaySubmitParams): Record<string, unknown> {
+  const base: Record<string, unknown> = { model: params.model, promptText: params.promptText };
+  if (params.ratio !== undefined) base["ratio"] = params.ratio;
+  if (params.duration !== undefined) base["duration"] = params.duration;
+  if (params.seed !== undefined) base["seed"] = params.seed;
+  if (endpoint === "image_to_video") base["promptImage"] = params.promptImage;
+  if (endpoint === "video_to_video") base["videoUri"] = params.videoUri;
+  return base;
+}
+
+export async function submitRunwayJob(
+  apiKey: string,
+  endpoint: RunwayEndpoint,
+  params: RunwaySubmitParams,
+  timeoutMs: number = DEFAULT_MEDIA_CALL_TIMEOUT_MS,
+): Promise<{ taskId: string }> {
+  const response = await timedFetch(
+    "runway",
+    `${RUNWAY_BASE_URL}/v1/${endpoint}`,
+    {
+      method: "POST",
+      headers: runwayHeaders(apiKey, { "content-type": "application/json" }),
+      body: JSON.stringify(buildSubmitBody(endpoint, params)),
+    },
+    timeoutMs,
+  );
+  if (!response.ok) {
+    throw classifyMediaHttpFailure("runway", response.status, await response.text());
+  }
+  const json = (await response.json()) as RunwaySubmitResponse;
+  return { taskId: json.id };
+}
+
+export type RunwayTaskStatus = "PENDING" | "THROTTLED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+
+export interface RunwayTaskState {
+  id: string;
+  status: RunwayTaskStatus;
+  progress?: number;
+  output?: string[];
+  failure?: string;
+  failureCode?: string;
+}
+
+/** Throws `job-not-found` on a 404 (Amendment 2 Decision 3: "the job expired
+ *  or was purged server-side, not a client bug") rather than the generic
+ *  submission-level classification — a 404 mid-poll means something
+ *  different here than a 404 on the submit call. */
+export async function pollRunwayTask(
+  apiKey: string,
+  taskId: string,
+  timeoutMs: number = DEFAULT_MEDIA_CALL_TIMEOUT_MS,
+): Promise<RunwayTaskState> {
+  const response = await timedFetch(
+    "runway",
+    `${RUNWAY_BASE_URL}/v1/tasks/${encodeURIComponent(taskId)}`,
+    { method: "GET", headers: runwayHeaders(apiKey) },
+    timeoutMs,
+  );
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new MediaExecutionError("job-not-found", "runway", `task ${taskId} was not found (HTTP 404) — it may have expired or been purged`);
+    }
+    throw classifyMediaHttpFailure("runway", response.status, await response.text());
+  }
+  return (await response.json()) as RunwayTaskState;
+}
+
+/**
+ * Cancels (or deletes, per Runway's own single-endpoint framing) a task.
+ * Amendment 3 item 1 confirms this endpoint exists — always attempted on
+ * user cancellation, never treated as "no cancel support" the way
+ * ElevenLabs dubbing is (see elevenlabs-execute.ts). Swallows any failure
+ * here rather than throwing: cancellation is already in progress client-side
+ * regardless of whether the provider-side cancel call itself succeeds, and
+ * ADR-0012 Amendment 2 Decision 4 already requires disclosing that a job MAY
+ * keep running if the cancel call doesn't land — that disclosure lives in
+ * the caller (generate-video.ts), not as a thrown error here.
+ */
+export async function cancelRunwayTask(
+  apiKey: string,
+  taskId: string,
+  timeoutMs: number = DEFAULT_MEDIA_CALL_TIMEOUT_MS,
+): Promise<{ cancelRequestSucceeded: boolean }> {
+  try {
+    const response = await timedFetch(
+      "runway",
+      `${RUNWAY_BASE_URL}/v1/tasks/${encodeURIComponent(taskId)}`,
+      { method: "DELETE", headers: runwayHeaders(apiKey) },
+      timeoutMs,
+    );
+    return { cancelRequestSucceeded: response.ok };
+  } catch {
+    return { cancelRequestSucceeded: false };
+  }
+}
+
+export interface RunwayJobProgress {
+  status: RunwayTaskStatus;
+  progress?: number;
+  elapsedMs: number;
+}
+
+export type RunwayJobOutcome =
+  | { outcome: "success"; taskId: string; resultUrls: string[] }
+  | { outcome: "failed"; taskId?: string; error: MediaExecutionError };
+
+/**
+ * Full submit -> poll-until-terminal -> result orchestration (ADR-0012
+ * Amendment 2 Decisions 1/3/4). Injectable `sleepFn`/`nowFn`/`isCancelled`
+ * so this is testable with zero real elapsed time and no live network call
+ * — same injection convention as run-task-lib.ts's `executeFn`/`fetchFn`.
+ *
+ * Cancellation (Decision 4): checked once per poll cycle. On cancellation,
+ * this stops polling AND calls Runway's confirmed cancel endpoint (Amendment
+ * 3 item 1) — but returns "failed"/"job-canceled" regardless of whether that
+ * cancel call itself succeeded, since from the caller's perspective the run
+ * is over either way; whether the provider-side job also stopped (and thus
+ * whether billing continues) is a separate fact the caller surfaces via
+ * `cancelRequestSucceeded`, not folded into the outcome type.
+ */
+export async function runRunwayJobToCompletion(
+  apiKey: string,
+  endpoint: RunwayEndpoint,
+  params: RunwaySubmitParams,
+  options: {
+    perCallTimeoutMs?: number;
+    totalJobTimeoutMs?: number;
+    pollIntervalMs?: number;
+    onProgress?: (update: RunwayJobProgress) => void;
+    isCancelled?: () => boolean;
+    onCancelled?: (result: { cancelRequestSucceeded: boolean }) => void;
+    sleepFn?: (ms: number) => Promise<void>;
+    nowFn?: () => number;
+  } = {},
+): Promise<RunwayJobOutcome> {
+  const {
+    perCallTimeoutMs = DEFAULT_MEDIA_CALL_TIMEOUT_MS,
+    totalJobTimeoutMs = DEFAULT_MEDIA_JOB_TIMEOUT_MS,
+    pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
+    onProgress,
+    isCancelled = () => false,
+    onCancelled,
+    sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    nowFn = Date.now,
+  } = options;
+
+  const startedAt = nowFn();
+  let taskId: string | undefined;
+
+  try {
+    const submitted = await submitRunwayJob(apiKey, endpoint, params, perCallTimeoutMs);
+    taskId = submitted.taskId;
+  } catch (e) {
+    const error = e instanceof MediaExecutionError ? e : new MediaExecutionError("provider-error", "runway", e instanceof Error ? e.message : String(e));
+    return { outcome: "failed", error };
+  }
+
+  for (;;) {
+    if (isCancelled()) {
+      const cancelResult = await cancelRunwayTask(apiKey, taskId, perCallTimeoutMs);
+      onCancelled?.(cancelResult);
+      return {
+        outcome: "failed",
+        taskId,
+        error: new MediaExecutionError("job-canceled", "runway", "canceled by the user"),
+      };
+    }
+
+    const elapsedMs = nowFn() - startedAt;
+    if (elapsedMs >= totalJobTimeoutMs) {
+      return {
+        outcome: "failed",
+        taskId,
+        error: new MediaExecutionError(
+          "poll-budget-exceeded",
+          "runway",
+          `job did not reach a terminal state within the ${totalJobTimeoutMs}ms wait budget`,
+        ),
+      };
+    }
+
+    let state: RunwayTaskState;
+    try {
+      state = await pollRunwayTask(apiKey, taskId, perCallTimeoutMs);
+    } catch (e) {
+      const error = e instanceof MediaExecutionError ? e : new MediaExecutionError("provider-error", "runway", e instanceof Error ? e.message : String(e));
+      return { outcome: "failed", taskId, error };
+    }
+
+    onProgress?.({ status: state.status, progress: state.progress, elapsedMs });
+
+    if (state.status === "SUCCEEDED") {
+      return { outcome: "success", taskId, resultUrls: state.output ?? [] };
+    }
+    if (state.status === "FAILED") {
+      return {
+        outcome: "failed",
+        taskId,
+        error: new MediaExecutionError(
+          "job-failed",
+          "runway",
+          state.failure ?? `task ${taskId} failed${state.failureCode ? ` (${state.failureCode})` : ""}`,
+        ),
+      };
+    }
+    if (state.status === "CANCELLED") {
+      return { outcome: "failed", taskId, error: new MediaExecutionError("job-canceled", "runway", "the task was canceled") };
+    }
+
+    await sleepFn(pollIntervalMs);
+  }
+}
+
+/** Downloads the first result URL to bytes — Decision 5's save-to-disk step
+ *  starts here; the actual disk write is vscode-coupled (generate-video.ts). */
+export async function downloadRunwayResult(
+  resultUrl: string,
+  timeoutMs: number = DEFAULT_MEDIA_CALL_TIMEOUT_MS,
+): Promise<DownloadedResult> {
+  return downloadMediaResult("runway", resultUrl, {}, timeoutMs);
+}

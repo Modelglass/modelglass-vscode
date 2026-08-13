@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.0 — 2026-08-13
+
+**The router now generates video and audio, not just LLM completions
+(SCO-430, implementing ADR-0012 Amendments 2/3).** Two new commands:
+**Generate Video (Runway)** and **Generate Audio (ElevenLabs)** — both
+BYOK, Starter/Pro only, no fallback chain (a deliberate reliability-first
+simplification, not an oversight). Video generation is async
+job-submit-and-poll (submit → poll `/v1/tasks/{id}` → signed result URL,
+cancellable via `DELETE /v1/tasks/{id}`), with a 12-minute total wait
+budget separate from the existing 60s per-call timeout. Audio splits by
+*endpoint*, not provider: core TTS and Instant Voice Cloning are
+synchronous (same request/response contract as LLM chat completions, just
+a binary body); dubbing is async like video, but with no confirmed
+cancel endpoint — canceling stops this extension from polling, but the
+job may keep running and billing on ElevenLabs' side, disclosed in the
+progress UI rather than assumed away. Generated files save to
+`.modelglass/generated/` in the current workspace (or the OS temp
+directory with none open) and reveal in the OS file explorer by default,
+rather than auto-opening. Runway/ElevenLabs keys are stored separately
+from the LLM router's provider keys (`src/media-provider-keys-lib.ts`) —
+deliberately NOT sharing Starter's single-LLM-key exclusivity, since a
+Runway key and a coding-router key are unrelated capabilities a user can
+reasonably want configured at the same time. Image generation (fal.ai) is
+explicitly out of scope for this release — a separate future addition
+once fal.ai is confirmed as the provider.
+
 ## 0.5.0 — 2026-07-29
 
 **The router's default is now genuinely cheapest-capable, not

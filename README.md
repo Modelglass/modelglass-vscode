@@ -171,6 +171,8 @@ today") right on each provider option, before you even paste a key.
 | **Modelglass: Set API Key** | Enter an existing free Modelglass API key, or clear the stored one (forcing re-provisioning on next use). |
 | **Modelglass: Set Provider API Key** | Starter: store a single provider key (LLM execution), replacing any previous one. |
 | **Modelglass: Add Provider API Key** | Pro: store an additional provider key alongside existing ones, for fallback chains. |
+| **Modelglass: Generate Video (Runway)** | Starter/Pro. Picks a Runway video model (ranked cheapest-first from the Modelglass feed), prompts for a text description (plus an input image/video file when the model needs one), submits the job, and polls to completion with a cancellable progress notification. Saves the result to `.modelglass/generated/` and reveals it in the OS file explorer. |
+| **Modelglass: Generate Audio (ElevenLabs)** | Starter/Pro. Choose Text to Speech (sync), Dub Audio/Video (async, polled with a cancellable progress notification — ElevenLabs has no confirmed dubbing-cancel endpoint, so canceling only stops this extension from waiting), or Clone a Voice (Instant Voice Cloning, sync). TTS/dubbing results save to `.modelglass/generated/` and reveal in the OS file explorer; voice cloning reports the new voice ID instead (it produces no file). |
 
 ![Modelglass: Compare Two Models diff output](docs/screenshot-compare.png)
 
@@ -180,8 +182,20 @@ today") right on each provider option, before you even paste a key.
   only, no execution — the original MVP command, unchanged since v0.1.0.
   **Run Task** (BYOK router, v0.3.0+) is also LLM-only, but ranks across nine
   finer-grained task categories and actually executes. Neither routes
-  image/video/audio — **Compare Two Models** is the only cross-modality
-  (image/llm/video/audio) command.
+  image/video/audio.
+- **Generate Video**/**Generate Audio** (BYOK, Starter/Pro) route video
+  (Runway) and audio (ElevenLabs TTS/dubbing/IVC) generation specifically —
+  a separate, much simpler price-only ranking (`src/media-routing-lib.ts`)
+  from Run Task's nine-category benchmark ranking, since this registry has
+  no capability-benchmark data for video/audio generation to rank on.
+  Image generation is explicitly out of scope for now (fal.ai, the likely
+  provider, isn't confirmed yet — a separate future addition). No fallback
+  chain for either command, on any tier — one attempt per invocation, same
+  as Route Task/Run Task, but deliberately with no same-provider retry
+  either (ADR-0012 Amendment 2). **Compare Two Models** remains the only
+  command that's cross-modality (image/llm/video/audio) in the sense of
+  comparing *pricing* across any of them; Generate Video/Audio only
+  *execute* against Runway/ElevenLabs specifically.
 - **Run Task** doesn't offer the composite "agentic multi-step" category —
   that needs its own subtask-decomposition UI, not built yet. It routes one
   task to one category per invocation, same "once per invocation" scope as
