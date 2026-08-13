@@ -68,8 +68,55 @@ function runwayHeaders(apiKey: string, extra?: Record<string, string>): Record<s
   };
 }
 
-function buildSubmitBody(endpoint: RunwayEndpoint, params: RunwaySubmitParams): Record<string, unknown> {
-  const base: Record<string, unknown> = { model: params.model, promptText: params.promptText };
+/**
+ * SCO-430 hotfix — found live (2026-08-13): this file was sending the
+ * Modelglass REGISTRY model_id (e.g. "runway/gen-4-5") straight through as
+ * Runway's `model` field, unmodified. Runway rejects it with a 400 —
+ * its own API uses a genuinely different naming convention (no creator
+ * prefix, underscores not hyphens, some abbreviated: "gen4.5", "gen4_turbo",
+ * "seedance2"). This is the same class of problem
+ * elevenlabs-execute.ts's resolveElevenLabsModelId already solves for
+ * ElevenLabs — this file never got the equivalent, until now.
+ *
+ * An explicit lookup table, not a generic string-transform heuristic:
+ * checked directly against Runway's own Node SDK source
+ * (github.com/runwayml/sdk-node's text-to-video.ts/image-to-video.ts/
+ * character-performance.ts, 2026-08-13) because the naming isn't a single
+ * consistent pattern a heuristic could derive reliably (gen4.5 keeps its
+ * dot; gen4_turbo/seedance2 don't) — guessing wrong here just trades one
+ * 400 for another.
+ *
+ * Two of this repo's seven registered Runway offerings are deliberately
+ * UNSUPPORTED (mapped to `undefined`), not guessed at:
+ *  - runway/gen-3-alpha — Gen-3 Alpha Turbo was retired from Runway's API
+ *    2026-07-30 (confirmed via Runway's own API changelog); no valid
+ *    `model` string exists anymore for it on any endpoint. The registry
+ *    entry itself is stale (still status: ga) — a separate, adjacent data
+ *    problem this fix doesn't touch, flagged here for whoever picks that up.
+ *  - runway/act-two — genuinely a different endpoint (`/v1/character_
+ *    performance`, confirmed via the SDK source), not `image_to_video` as
+ *    this repo's endpointForSubModality mapping (generate-video.ts) assumes
+ *    from the registry's `model.modality: image-to-video` classification.
+ *    Character Performance takes a reference performance video + a
+ *    character image, a different input shape than every other model this
+ *    adapter supports — building that properly is a real follow-up, not a
+ *    same-file fix.
+ */
+export function resolveRunwayModelId(registryModelId: string): string | undefined {
+  const RUNWAY_MODEL_IDS: Record<string, string | undefined> = {
+    "runway/gen-4-5": "gen4.5",
+    "runway/gen-4-turbo": "gen4_turbo",
+    "runway/seedance-2": "seedance2",
+    "runway/aleph2": "aleph2",
+    "happyhorse/happyhorse-1-0": "happyhorse_1_0",
+    "runway/gen-3-alpha": undefined, // retired 2026-07-30 — see this function's header
+    "runway/act-two": undefined, // needs /v1/character_performance — see this function's header
+  };
+  return RUNWAY_MODEL_IDS[registryModelId];
+}
+
+function buildSubmitBody(endpoint: RunwayEndpoint, model: string, params: RunwaySubmitParams): Record<string, unknown> {
+  const base: Record<string, unknown> = { model, promptText: params.promptText };
   if (params.ratio !== undefined) base["ratio"] = params.ratio;
   if (params.duration !== undefined) base["duration"] = params.duration;
   if (params.seed !== undefined) base["seed"] = params.seed;
@@ -84,13 +131,21 @@ export async function submitRunwayJob(
   params: RunwaySubmitParams,
   timeoutMs: number = DEFAULT_MEDIA_CALL_TIMEOUT_MS,
 ): Promise<{ taskId: string }> {
+  const runwayModelId = resolveRunwayModelId(params.model);
+  if (!runwayModelId) {
+    throw new MediaExecutionError(
+      "model-not-found",
+      "runway",
+      `no Runway API model string is known for "${params.model}" — it may be retired, or need an endpoint this adapter doesn't support yet`,
+    );
+  }
   const response = await timedFetch(
     "runway",
     `${RUNWAY_BASE_URL}/v1/${endpoint}`,
     {
       method: "POST",
       headers: runwayHeaders(apiKey, { "content-type": "application/json" }),
-      body: JSON.stringify(buildSubmitBody(endpoint, params)),
+      body: JSON.stringify(buildSubmitBody(endpoint, runwayModelId, params)),
     },
     timeoutMs,
   );

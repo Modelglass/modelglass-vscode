@@ -2,3 +2,9 @@ node_modules/
 dist/
 *.vsix
 .vscode-test/
+.DS_Store
+
+# SCO-430 — runtime output written by generate-video.ts/generate-audio.ts
+# (media-file-save-lib.ts's resolveOutputDirectory): generated video/audio
+# files, never source, never meant to be committed or packaged.
+.modelglass/

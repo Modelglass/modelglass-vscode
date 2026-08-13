@@ -7,3 +7,14 @@ tsconfig.json
 **/*.map
 .gitignore
 *.vsix
+
+# SCO-430 hotfix (2026-08-13) — found live: neither of these was excluded,
+# so `vsce package` swept a tester's local generated-output directory and
+# manual-test screenshots straight into the shipped .vsix (8.77MB instead
+# of ~1.5MB, including someone's voice sample audio). .modelglass/ is
+# runtime output (see .gitignore); tests/ here is ad hoc local
+# screenshots/artifacts, not this repo's actual test suite (that's
+# src/*.test.ts, run via `npm test` — unaffected by this exclusion).
+.modelglass/**
+tests/**
+.DS_Store
