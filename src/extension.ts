@@ -8,6 +8,8 @@ import { promptAndSetProviderKey, promptAndAddProviderKey, promptAndClearProvide
 import { runTask } from "./run-task.js";
 import { registerModelglassChatProvider } from "./lm-provider.js";
 import { registerModelglassChatView } from "./chat-view.js";
+import { generateVideo } from "./generate-video.js";
+import { generateAudio } from "./generate-audio.js";
 
 export function activate(context: vscode.ExtensionContext): void {
   // SCO-331 -- registers separately from the command subscriptions below
@@ -75,6 +77,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("modelglass.runTask", () => runTask(context)),
 
     vscode.commands.registerCommand("modelglass.addProviderKey", () => promptAndAddProviderKey(context)),
+
+    // SCO-430 — video/audio generation (ADR-0012 Amendments 2/3).
+    vscode.commands.registerCommand("modelglass.generateVideo", () => generateVideo(context)),
+    vscode.commands.registerCommand("modelglass.generateAudio", () => generateAudio(context)),
   );
 }
 
