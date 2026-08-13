@@ -171,7 +171,7 @@ today") right on each provider option, before you even paste a key.
 | **Modelglass: Set API Key** | Enter an existing free Modelglass API key, or clear the stored one (forcing re-provisioning on next use). |
 | **Modelglass: Set Provider API Key** | Starter: store a single provider key (LLM execution), replacing any previous one. |
 | **Modelglass: Add Provider API Key** | Pro: store an additional provider key alongside existing ones, for fallback chains. |
-| **Modelglass: Generate Video (Runway)** | Starter/Pro. Picks a Runway video model (ranked cheapest-first from the Modelglass feed), prompts for a text description (plus an input image/video file when the model needs one), submits the job, and polls to completion with a cancellable progress notification. Saves the result to `.modelglass/generated/` and reveals it in the OS file explorer. |
+| **Modelglass: Generate Video (Runway)** | Starter/Pro. Picks a Runway video model (ranked cheapest-first from the Modelglass feed — 5 of the registry's 7 Runway entries are offered, see [Known limitations](#known-limitations)), prompts for a text description (plus an input image/video file when the model needs one), submits the job, and polls to completion with a cancellable progress notification. Output ratio is a fixed 1280:720 landscape default, not yet user-selectable. Saves the result to `.modelglass/generated/` and reveals it in the OS file explorer. |
 | **Modelglass: Generate Audio (ElevenLabs)** | Starter/Pro. Choose Text to Speech (sync), Dub Audio/Video (async, polled with a cancellable progress notification — ElevenLabs has no confirmed dubbing-cancel endpoint, so canceling only stops this extension from waiting), or Clone a Voice (Instant Voice Cloning, sync). TTS/dubbing results save to `.modelglass/generated/` and reveal in the OS file explorer; voice cloning reports the new voice ID instead (it produces no file). |
 
 ![Modelglass: Compare Two Models diff output](docs/screenshot-compare.png)
@@ -218,6 +218,28 @@ today") right on each provider option, before you even paste a key.
   sample extension does the same, so this isn't a stopgap), and no deep
   cancellation into the underlying provider call once it's started. All
   three are real, separately-scoped follow-ups, not silently dropped.
+
+## Known limitations
+
+Specific to **Generate Video**/**Generate Audio** (SCO-430), called out here
+rather than left implicit:
+
+- **Video output ratio is a fixed 1280:720 landscape default** — Runway
+  requires an explicit ratio for some models (Gen-4.5, Gen-4 Turbo) with no
+  server-side default of its own, and this release always supplies the same
+  one rather than offering a picker. Portrait/square output isn't reachable
+  yet.
+- **Gen-3 Alpha is not offered** — it was retired from Runway's API
+  (2026-07-30) and no longer has a working model identifier, even though it
+  may still show as available on [modelglass.com.au](https://modelglass.com.au)
+  itself (a separate registry-data staleness issue, tracked independently).
+- **Act-Two is not offered** — it requires a different Runway endpoint
+  (Character Performance, a reference-video-plus-character-image input
+  shape) than this release's adapter supports.
+- **ElevenLabs dubbing has no confirmed cancel endpoint.** Canceling a
+  dubbing job stops this extension from polling it, but the job may keep
+  running (and billing) on ElevenLabs' side regardless — disclosed in the
+  progress notification, not silently assumed away.
 
 ## Relationship to `cost-aware-vscode-router`
 

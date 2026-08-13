@@ -26,6 +26,14 @@ reasonably want configured at the same time. Image generation (fal.ai) is
 explicitly out of scope for this release — a separate future addition
 once fal.ai is confirmed as the provider.
 
+**Generate Video offers 5 Runway models** (Gen-4.5, Gen-4 Turbo, Seedance 2,
+Aleph 2, HappyHorse 1.0) — two of the seven in the Modelglass registry are
+not offered: **Gen-3 Alpha** has been retired from Runway's API and no
+longer has a working model identifier; **Act-Two** needs a different
+Runway endpoint (Character Performance) than this release supports. Video
+output ratio currently defaults to a fixed 1280:720 landscape — not yet
+user-selectable.
+
 ## 0.5.0 — 2026-07-29
 
 **The router's default is now genuinely cheapest-capable, not
