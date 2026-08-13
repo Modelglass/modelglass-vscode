@@ -115,10 +115,45 @@ export function resolveRunwayModelId(registryModelId: string): string | undefine
   return RUNWAY_MODEL_IDS[registryModelId];
 }
 
+/**
+ * SCO-430 hotfix 2 (2026-08-13) — found live, second real Runway 400 after
+ * the model-ID fix above: this file omitted `ratio`/`duration` entirely,
+ * on the assumption Runway would apply its own defaults when they're
+ * absent. Wrong for some models — confirmed by the actual error hitting
+ * gen4.5 (the cheapest, so the QuickPick's default pick): `ratio` has NO
+ * server-side default for gen4.5/gen4_turbo specifically, so omitting it
+ * is a guaranteed 400, not a graceful fallback.
+ *
+ * Checked per-model, not assumed uniform — Runway's own SDK source
+ * (image-to-video.ts/text-to-video.ts/video-to-video.ts, same commit as
+ * resolveRunwayModelId above) shows this genuinely varies by model:
+ *  - gen4.5: `ratio` REQUIRED (6-value enum), `duration` REQUIRED (2-10s
+ *    integer, no default).
+ *  - gen4_turbo: `ratio` REQUIRED (same 6-value enum), `duration` optional.
+ *  - seedance2, happyhorse_1_0 (on the text_to_video endpoint this repo
+ *    calls them through), aleph2: both optional — Runway's own default
+ *    applies, matching this repo's original (correct, for these three)
+ *    assumption. Left alone; only gen4.5/gen4_turbo needed a fix.
+ *
+ * Landscape 1280:720 was picked as the default ratio (present in every
+ * one of these models' enums, including gen4_turbo's) rather than a
+ * per-endpoint aspect choice — a real creative decision a future ratio
+ * QuickPick could expose, not attempted here to keep this a scoped fix
+ * for the crash, not a new prompt step. 5s duration for gen4.5 matches
+ * the worked example in Runway's own API documentation.
+ */
+const RUNWAY_REQUIRED_DEFAULTS: Record<string, { ratio?: string; duration?: number }> = {
+  "gen4.5": { ratio: "1280:720", duration: 5 },
+  gen4_turbo: { ratio: "1280:720" },
+};
+
 function buildSubmitBody(endpoint: RunwayEndpoint, model: string, params: RunwaySubmitParams): Record<string, unknown> {
+  const defaults = RUNWAY_REQUIRED_DEFAULTS[model];
+  const ratio = params.ratio ?? defaults?.ratio;
+  const duration = params.duration ?? defaults?.duration;
   const base: Record<string, unknown> = { model, promptText: params.promptText };
-  if (params.ratio !== undefined) base["ratio"] = params.ratio;
-  if (params.duration !== undefined) base["duration"] = params.duration;
+  if (ratio !== undefined) base["ratio"] = ratio;
+  if (duration !== undefined) base["duration"] = duration;
   if (params.seed !== undefined) base["seed"] = params.seed;
   if (endpoint === "image_to_video") base["promptImage"] = params.promptImage;
   if (endpoint === "video_to_video") base["videoUri"] = params.videoUri;

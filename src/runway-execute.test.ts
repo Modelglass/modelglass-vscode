@@ -80,6 +80,58 @@ describe("submitRunwayJob", () => {
     assert.equal(body.videoUri, undefined);
   });
 
+  test("gen4.5 gets a default ratio AND duration filled in when the caller doesn't supply one (both are required by Runway, no server default)", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push({ init });
+      return jsonResponse(200, { id: "task-1" });
+    }) as typeof fetch;
+
+    await submitRunwayJob("rw-key", "text_to_video", { model: "runway/gen-4-5", promptText: "a cat" });
+    const body = JSON.parse(calls[0]!.init.body as string);
+    assert.equal(body.ratio, "1280:720");
+    assert.equal(body.duration, 5);
+  });
+
+  test("gen4_turbo gets a default ratio but NOT a default duration (duration is optional for this model)", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push({ init });
+      return jsonResponse(200, { id: "task-1" });
+    }) as typeof fetch;
+
+    await submitRunwayJob("rw-key", "image_to_video", { model: "runway/gen-4-turbo", promptText: "x", promptImage: "data:image/png;base64,AAAA" });
+    const body = JSON.parse(calls[0]!.init.body as string);
+    assert.equal(body.ratio, "1280:720");
+    assert.equal(body.duration, undefined);
+  });
+
+  test("an explicit ratio/duration from the caller overrides the default, not the other way around", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push({ init });
+      return jsonResponse(200, { id: "task-1" });
+    }) as typeof fetch;
+
+    await submitRunwayJob("rw-key", "text_to_video", { model: "runway/gen-4-5", promptText: "a cat", ratio: "720:1280", duration: 8 });
+    const body = JSON.parse(calls[0]!.init.body as string);
+    assert.equal(body.ratio, "720:1280");
+    assert.equal(body.duration, 8);
+  });
+
+  test("seedance2 sends no ratio/duration at all when the caller doesn't supply one (both genuinely optional for this model)", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push({ init });
+      return jsonResponse(200, { id: "task-1" });
+    }) as typeof fetch;
+
+    await submitRunwayJob("rw-key", "text_to_video", { model: "runway/seedance-2", promptText: "x" });
+    const body = JSON.parse(calls[0]!.init.body as string);
+    assert.equal(body.ratio, undefined);
+    assert.equal(body.duration, undefined);
+  });
+
   test("an unsupported model (e.g. retired gen-3-alpha) is rejected client-side, with no network call at all", async () => {
     let fetchCalled = false;
     globalThis.fetch = (async () => {
