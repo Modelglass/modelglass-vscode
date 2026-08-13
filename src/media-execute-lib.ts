@@ -95,6 +95,17 @@ const MODEL_NOT_FOUND_BODY_PATTERN =
  * ADR-0012 table) but returns this file's own MediaExecutionError — see
  * this file's header for why that's a duplication, not a missed reuse.
  */
+/**
+ * SCO-430 hotfix (2026-08-13) — was 300 chars, which cut a real Runway
+ * validation error off mid-JSON (its structured `issues[].values` array of
+ * accepted model strings is exactly the diagnostic detail a user needs to
+ * see, and it's longer than a typical LLM provider's plain-text error).
+ * 800 is a deliberate widen, not an arbitrary bump — generous enough for a
+ * multi-field Zod-style validation body while still bounded (this goes into
+ * a notification/Output-channel line, not an unbounded dump).
+ */
+const ERROR_BODY_PREVIEW_CHARS = 800;
+
 export function classifyMediaHttpFailure(
   provider: string,
   status: number,
@@ -110,13 +121,13 @@ export function classifyMediaHttpFailure(
     return new MediaExecutionError(
       "model-not-found",
       provider,
-      `${provider} doesn't recognize this model string (HTTP ${status}): ${bodyText.slice(0, 300)}`,
+      `${provider} doesn't recognize this model string (HTTP ${status}): ${bodyText.slice(0, ERROR_BODY_PREVIEW_CHARS)}`,
     );
   }
   return new MediaExecutionError(
     "provider-error",
     provider,
-    `${provider} returned HTTP ${status}: ${bodyText.slice(0, 300)}`,
+    `${provider} returned HTTP ${status}: ${bodyText.slice(0, ERROR_BODY_PREVIEW_CHARS)}`,
   );
 }
 

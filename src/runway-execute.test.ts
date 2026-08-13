@@ -6,6 +6,7 @@ import {
   RUNWAY_BASE_URL,
   cancelRunwayTask,
   pollRunwayTask,
+  resolveRunwayModelId,
   runRunwayJobToCompletion,
   submitRunwayJob,
 } from "./runway-execute.js";
@@ -20,6 +21,31 @@ function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
+describe("resolveRunwayModelId", () => {
+  // SCO-430 hotfix — this is the exact bug a real Runway 400 surfaced live:
+  // the registry model_id was being sent as-is instead of Runway's own
+  // model string.
+  test("maps every currently-callable registered Runway model to its real Runway API string", () => {
+    assert.equal(resolveRunwayModelId("runway/gen-4-5"), "gen4.5");
+    assert.equal(resolveRunwayModelId("runway/gen-4-turbo"), "gen4_turbo");
+    assert.equal(resolveRunwayModelId("runway/seedance-2"), "seedance2");
+    assert.equal(resolveRunwayModelId("runway/aleph2"), "aleph2");
+    assert.equal(resolveRunwayModelId("happyhorse/happyhorse-1-0"), "happyhorse_1_0");
+  });
+
+  test("returns undefined for gen-3-alpha (retired from Runway's API) rather than a guessed string", () => {
+    assert.equal(resolveRunwayModelId("runway/gen-3-alpha"), undefined);
+  });
+
+  test("returns undefined for act-two (needs a different endpoint this adapter doesn't support yet)", () => {
+    assert.equal(resolveRunwayModelId("runway/act-two"), undefined);
+  });
+
+  test("returns undefined for a model_id this table has never heard of", () => {
+    assert.equal(resolveRunwayModelId("runway/some-future-model"), undefined);
+  });
+});
+
 describe("submitRunwayJob", () => {
   test("posts to the right endpoint with Runway's required headers and returns the task id", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -28,7 +54,7 @@ describe("submitRunwayJob", () => {
       return jsonResponse(200, { id: "task-123" });
     }) as typeof fetch;
 
-    const result = await submitRunwayJob("rw-key", "text_to_video", { model: "gen4.5", promptText: "a cat" });
+    const result = await submitRunwayJob("rw-key", "text_to_video", { model: "runway/gen-4-5", promptText: "a cat" });
 
     assert.equal(result.taskId, "task-123");
     assert.equal(calls.length, 1);
@@ -48,16 +74,82 @@ describe("submitRunwayJob", () => {
       return jsonResponse(200, { id: "task-456" });
     }) as typeof fetch;
 
-    await submitRunwayJob("rw-key", "image_to_video", { model: "gen4-5", promptText: "animate this", promptImage: "data:image/png;base64,AAAA" });
+    await submitRunwayJob("rw-key", "image_to_video", { model: "runway/gen-4-5", promptText: "animate this", promptImage: "data:image/png;base64,AAAA" });
     const body = JSON.parse(calls[0]!.init.body as string);
     assert.equal(body.promptImage, "data:image/png;base64,AAAA");
     assert.equal(body.videoUri, undefined);
   });
 
+  test("gen4.5 gets a default ratio AND duration filled in when the caller doesn't supply one (both are required by Runway, no server default)", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push({ init });
+      return jsonResponse(200, { id: "task-1" });
+    }) as typeof fetch;
+
+    await submitRunwayJob("rw-key", "text_to_video", { model: "runway/gen-4-5", promptText: "a cat" });
+    const body = JSON.parse(calls[0]!.init.body as string);
+    assert.equal(body.ratio, "1280:720");
+    assert.equal(body.duration, 5);
+  });
+
+  test("gen4_turbo gets a default ratio but NOT a default duration (duration is optional for this model)", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push({ init });
+      return jsonResponse(200, { id: "task-1" });
+    }) as typeof fetch;
+
+    await submitRunwayJob("rw-key", "image_to_video", { model: "runway/gen-4-turbo", promptText: "x", promptImage: "data:image/png;base64,AAAA" });
+    const body = JSON.parse(calls[0]!.init.body as string);
+    assert.equal(body.ratio, "1280:720");
+    assert.equal(body.duration, undefined);
+  });
+
+  test("an explicit ratio/duration from the caller overrides the default, not the other way around", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push({ init });
+      return jsonResponse(200, { id: "task-1" });
+    }) as typeof fetch;
+
+    await submitRunwayJob("rw-key", "text_to_video", { model: "runway/gen-4-5", promptText: "a cat", ratio: "720:1280", duration: 8 });
+    const body = JSON.parse(calls[0]!.init.body as string);
+    assert.equal(body.ratio, "720:1280");
+    assert.equal(body.duration, 8);
+  });
+
+  test("seedance2 sends no ratio/duration at all when the caller doesn't supply one (both genuinely optional for this model)", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      calls.push({ init });
+      return jsonResponse(200, { id: "task-1" });
+    }) as typeof fetch;
+
+    await submitRunwayJob("rw-key", "text_to_video", { model: "runway/seedance-2", promptText: "x" });
+    const body = JSON.parse(calls[0]!.init.body as string);
+    assert.equal(body.ratio, undefined);
+    assert.equal(body.duration, undefined);
+  });
+
+  test("an unsupported model (e.g. retired gen-3-alpha) is rejected client-side, with no network call at all", async () => {
+    let fetchCalled = false;
+    globalThis.fetch = (async () => {
+      fetchCalled = true;
+      return jsonResponse(200, { id: "should-never-happen" });
+    }) as typeof fetch;
+
+    await assert.rejects(
+      () => submitRunwayJob("rw-key", "text_to_video", { model: "runway/gen-3-alpha", promptText: "x" }),
+      (e: unknown) => e instanceof MediaExecutionError && e.kind === "model-not-found",
+    );
+    assert.equal(fetchCalled, false);
+  });
+
   test("a 401 response is classified as invalid-key", async () => {
     globalThis.fetch = (async () => jsonResponse(401, { error: "bad key" })) as typeof fetch;
     await assert.rejects(
-      () => submitRunwayJob("bad-key", "text_to_video", { model: "gen4.5", promptText: "x" }),
+      () => submitRunwayJob("bad-key", "text_to_video", { model: "runway/gen-4-5", promptText: "x" }),
       (e: unknown) => e instanceof MediaExecutionError && e.kind === "invalid-key",
     );
   });
@@ -122,7 +214,7 @@ describe("runRunwayJobToCompletion", () => {
     const result = await runRunwayJobToCompletion(
       "rw-key",
       "text_to_video",
-      { model: "gen4.5", promptText: "x" },
+      { model: "runway/gen-4-5", promptText: "x" },
       { nowFn, sleepFn },
     );
 
@@ -140,7 +232,7 @@ describe("runRunwayJobToCompletion", () => {
     }) as typeof fetch;
 
     const { nowFn, sleepFn } = fakeClock();
-    const result = await runRunwayJobToCompletion("rw-key", "text_to_video", { model: "gen4.5", promptText: "x" }, { nowFn, sleepFn });
+    const result = await runRunwayJobToCompletion("rw-key", "text_to_video", { model: "runway/gen-4-5", promptText: "x" }, { nowFn, sleepFn });
 
     assert.equal(result.outcome, "failed");
     if (result.outcome === "failed") {
@@ -159,7 +251,7 @@ describe("runRunwayJobToCompletion", () => {
     const result = await runRunwayJobToCompletion(
       "rw-key",
       "text_to_video",
-      { model: "gen4.5", promptText: "x" },
+      { model: "runway/gen-4-5", promptText: "x" },
       { nowFn, sleepFn, totalJobTimeoutMs: 20_000, pollIntervalMs: 5_000 },
     );
 
@@ -185,7 +277,7 @@ describe("runRunwayJobToCompletion", () => {
     const result = await runRunwayJobToCompletion(
       "rw-key",
       "text_to_video",
-      { model: "gen4.5", promptText: "x" },
+      { model: "runway/gen-4-5", promptText: "x" },
       { nowFn, sleepFn, isCancelled: () => cancelled, onProgress: () => { cancelled = true; } },
     );
 
@@ -198,7 +290,7 @@ describe("runRunwayJobToCompletion", () => {
   test("a submission failure (e.g. invalid key) short-circuits before any poll", async () => {
     globalThis.fetch = (async () => jsonResponse(401, {})) as typeof fetch;
     const { nowFn, sleepFn } = fakeClock();
-    const result = await runRunwayJobToCompletion("bad-key", "text_to_video", { model: "gen4.5", promptText: "x" }, { nowFn, sleepFn });
+    const result = await runRunwayJobToCompletion("bad-key", "text_to_video", { model: "runway/gen-4-5", promptText: "x" }, { nowFn, sleepFn });
     assert.equal(result.outcome, "failed");
     if (result.outcome === "failed") assert.equal(result.error.kind, "invalid-key");
   });

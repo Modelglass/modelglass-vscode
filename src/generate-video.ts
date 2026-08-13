@@ -8,6 +8,7 @@ import { getMediaProviderKey, setMediaProviderKey } from "./media-provider-keys-
 import { fetchMediaModels, normaliseMediaOfferings, rankMediaModelsByPrice, type RoutableMediaModel } from "./media-routing-lib.js";
 import {
   downloadRunwayResult,
+  resolveRunwayModelId,
   runRunwayJobToCompletion,
   type RunwayEndpoint,
   type RunwaySubmitParams,
@@ -130,7 +131,14 @@ export async function generateVideo(context: vscode.ExtensionContext): Promise<v
   }
 
   const ranked = rankMediaModelsByPrice(allModels, RUNWAY_PROVIDER);
-  const supported = ranked.filter((m) => endpointForSubModality(m.subModality) !== undefined);
+  // SCO-430 hotfix (2026-08-13) — filter to models this adapter can actually
+  // call: a known endpoint AND a known Runway API model string
+  // (resolveRunwayModelId — see runway-execute.ts's header for why two of
+  // this repo's registered Runway models are deliberately excluded here
+  // rather than offered and left to 400).
+  const supported = ranked.filter(
+    (m) => endpointForSubModality(m.subModality) !== undefined && resolveRunwayModelId(m.modelId) !== undefined,
+  );
   if (supported.length === 0) {
     vscode.window.showErrorMessage("Modelglass: no Runway video models are currently available in the Modelglass feed.");
     return;
