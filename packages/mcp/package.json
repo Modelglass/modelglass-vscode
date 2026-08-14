@@ -36,7 +36,8 @@
     "build": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "typecheck": "tsc --noEmit",
-    "package": "npm run build && vsce package",
+    "package": "npm run build && vsce package --no-dependencies",
+    "publish": "vsce publish --no-dependencies",
     "vscode:prepublish": "npm run build"
   },
   "dependencies": {
