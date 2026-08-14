@@ -89,7 +89,8 @@
     "watch": "node esbuild.js --watch",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx/esm --test src/*.test.ts",
-    "package": "npm run build && vsce package",
+    "package": "npm run build && vsce package --no-dependencies",
+    "publish": "vsce publish --no-dependencies",
     "vscode:prepublish": "npm run build"
   },
   "dependencies": {
