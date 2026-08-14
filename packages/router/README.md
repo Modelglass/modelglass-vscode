@@ -9,7 +9,7 @@ directly against your own provider key** — a fully client-side, BYOK
 ElevenLabs)** the same way — your own keys, no proxy — see **Generate
 Video**/**Generate Audio** in [Commands](#commands) below.
 
-![Modelglass: Route Task recommendation](docs/screenshot.png)
+![Modelglass: Route Task recommendation](https://raw.githubusercontent.com/Modelglass/modelglass-vscode/main/packages/router/docs/screenshot.png)
 
 There are two distinct routing commands in this extension — see
 [Commands](#commands) below for exactly how they differ. **Route Task** (the
@@ -177,7 +177,7 @@ today") right on each provider option, before you even paste a key.
 | **Modelglass: Generate Video (Runway)** | Starter/Pro. Picks a Runway video model (ranked cheapest-first from the Modelglass feed — 5 of the registry's 7 Runway entries are offered, see [Known limitations](#known-limitations)), prompts for a text description (plus an input image/video file when the model needs one), submits the job, and polls to completion with a cancellable progress notification. Output ratio is a fixed 1280:720 landscape default, not yet user-selectable. Saves the result to `.modelglass/generated/` and reveals it in the OS file explorer. |
 | **Modelglass: Generate Audio (ElevenLabs)** | Starter/Pro. Choose Text to Speech (sync), Dub Audio/Video (async, polled with a cancellable progress notification — ElevenLabs has no confirmed dubbing-cancel endpoint, so canceling only stops this extension from waiting), or Clone a Voice (Instant Voice Cloning, sync). TTS/dubbing results save to `.modelglass/generated/` and reveal in the OS file explorer; voice cloning reports the new voice ID instead (it produces no file). |
 
-![Modelglass: Compare Two Models diff output](docs/screenshot-compare.png)
+![Modelglass: Compare Two Models diff output](https://raw.githubusercontent.com/Modelglass/modelglass-vscode/main/packages/router/docs/screenshot-compare.png)
 
 ## Scope
 

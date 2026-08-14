@@ -11,7 +11,7 @@ API. There's no new server here — the server side is the same MCP endpoint
 Modelglass already runs; this just makes it discoverable without hand-editing
 config files.
 
-![Modelglass MCP answering a live pricing question in Copilot Chat](docs/screenshot.png)
+![Modelglass MCP answering a live pricing question in Copilot Chat](https://raw.githubusercontent.com/Modelglass/modelglass-vscode/main/packages/mcp/docs/screenshot.png)
 
 ## What you get
 

@@ -1,13 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.6.2 — 2026-08-14
 
-Repo restructure (SCO-434), no functional change: this extension now lives
-at `packages/router/` in the `modelglass-vscode` repo, alongside a new
-standalone **Modelglass MCP** extension (`packages/mcp/`) that shares this
-extension's SecretStorage auth (extracted to `packages/shared/`). Same
+Docs only, no functional change. This is the first publish since the
+SCO-434 repo restructure (this extension now lives at `packages/router/`
+in the `modelglass-vscode` repo, alongside a new standalone **Modelglass
+MCP** extension sharing this extension's SecretStorage auth) — same
 publisher, extension ID (`modelglass.cost-aware-router`), commands, and
-behaviour — existing installs are unaffected.
+behaviour throughout, existing installs unaffected. That restructure did
+have one live side effect worth a release on its own: both README
+screenshots had gone dark on the Marketplace listing, discovered publishing
+`modelglass-mcp` — `vsce` rewrites relative README image links to GitHub
+raw URLs but doesn't account for `repository.directory` in this monorepo,
+so it dropped the `packages/router/` path segment and pointed at a 404
+(the underlying files moved when the restructure merged, so this had been
+broken since then, independent of this release). Fixed by using explicit
+absolute `raw.githubusercontent.com` URLs instead of relative paths.
 
 ## 0.6.1 — 2026-08-13
 
