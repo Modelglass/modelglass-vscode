@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { clearApiKey, ensureApiKey, promptForKey } from "./auth.js";
+import { clearApiKey, ensureApiKey, promptForKey } from "@modelglass/vscode-shared";
 import { fetchLLMModels } from "./lib.js";
 import { promptForSubtask } from "./task.js";
 import { showRecommendation } from "./recommend.js";

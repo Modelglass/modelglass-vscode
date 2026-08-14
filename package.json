@@ -1,102 +1,13 @@
 {
-  "name": "cost-aware-router",
-  "displayName": "Modelglass Cost-Aware Router",
-  "description": "Route dev tasks to the cheapest capable LLM, and generate video (Runway) and audio (ElevenLabs) — all directly against your own provider keys (BYOK), no proxy — using the live Modelglass pricing feed.",
-  "version": "0.6.1",
-  "publisher": "modelglass",
+  "name": "modelglass-vscode",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Modelglass's VS Code extensions — Cost-Aware Router (packages/router) and the standalone MCP extension (packages/mcp), sharing SecretStorage auth + API config (packages/shared). npm workspaces monorepo; each package publishes independently to the Marketplace.",
   "license": "MIT",
-  "type": "module",
-  "icon": "icon.png",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Modelglass/modelglass-vscode"
-  },
-  "bugs": {
-    "url": "https://github.com/Modelglass/modelglass-vscode/issues"
-  },
-  "homepage": "https://github.com/Modelglass/modelglass-vscode#readme",
-  "engines": {
-    "vscode": "^1.104.0",
-    "node": ">=20"
-  },
-  "categories": ["Other", "Machine Learning"],
-  "keywords": ["llm", "cost", "routing", "pricing", "ai", "video", "audio"],
-  "activationEvents": [],
-  "main": "./dist/extension.cjs",
-  "contributes": {
-    "commands": [
-      {
-        "command": "modelglass.routeTask",
-        "title": "Modelglass: Route Task to Cheapest Capable Model"
-      },
-      {
-        "command": "modelglass.compareModels",
-        "title": "Modelglass: Compare Two Models"
-      },
-      {
-        "command": "modelglass.setApiKey",
-        "title": "Modelglass: Set API Key"
-      },
-      {
-        "command": "modelglass.setProviderKey",
-        "title": "Modelglass: Set Provider API Key"
-      },
-      {
-        "command": "modelglass.runTask",
-        "title": "Modelglass: Run Task on Cheapest Capable Model"
-      },
-      {
-        "command": "modelglass.addProviderKey",
-        "title": "Modelglass: Add Provider API Key"
-      },
-      {
-        "command": "modelglass.generateVideo",
-        "title": "Modelglass: Generate Video (Runway)"
-      },
-      {
-        "command": "modelglass.generateAudio",
-        "title": "Modelglass: Generate Audio (ElevenLabs)"
-      }
-    ],
-    "languageModelChatProviders": [
-      {
-        "vendor": "modelglass",
-        "displayName": "Modelglass Router"
-      }
-    ],
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "modelglass-chat-container",
-          "title": "Modelglass Chat",
-          "icon": "icons/chat-view.svg"
-        }
-      ]
-    },
-    "views": {
-      "modelglass-chat-container": [
-        {
-          "id": "modelglass.chatView",
-          "name": "Modelglass Chat",
-          "type": "webview"
-        }
-      ]
-    }
-  },
+  "workspaces": ["packages/*"],
   "scripts": {
-    "build": "node esbuild.js",
-    "watch": "node esbuild.js --watch",
-    "typecheck": "tsc --noEmit",
-    "test": "node --import tsx/esm --test src/*.test.ts",
-    "package": "npm run build && vsce package",
-    "vscode:prepublish": "npm run build"
-  },
-  "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@types/vscode": "^1.104.0",
-    "@vscode/vsce": "^3.2.0",
-    "esbuild": "^0.24.0",
-    "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present"
   }
 }

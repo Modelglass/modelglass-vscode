@@ -1,5 +1,4 @@
 .vscode/**
-.github/**
 src/**
 node_modules/**
 esbuild.js
@@ -15,6 +14,10 @@ tsconfig.json
 # runtime output (see .gitignore); tests/ here is ad hoc local
 # screenshots/artifacts, not this repo's actual test suite (that's
 # src/*.test.ts, run via `npm test` — unaffected by this exclusion).
+# SCO-434: .github/** was dropped from this list during the router/mcp
+# split — .github now lives at the repo root, structurally outside this
+# package's vsce root (packages/router/), so it can never be swept in
+# regardless of this file; keeping a dead entry here would be misleading.
 .modelglass/**
 tests/**
 .DS_Store

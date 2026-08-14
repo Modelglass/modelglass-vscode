@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+Repo restructure (SCO-434), no functional change: this extension now lives
+at `packages/router/` in the `modelglass-vscode` repo, alongside a new
+standalone **Modelglass MCP** extension (`packages/mcp/`) that shares this
+extension's SecretStorage auth (extracted to `packages/shared/`). Same
+publisher, extension ID (`modelglass.cost-aware-router`), commands, and
+behaviour — existing installs are unaffected.
+
 ## 0.6.1 — 2026-08-13
 
 Docs only, no functional change — 0.6.0 published to the Marketplace with

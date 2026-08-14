@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ensureApiKey, output } from "./auth.js";
+import { ensureApiKey, output } from "@modelglass/vscode-shared";
 import { getConfiguredProviders } from "./provider-keys-lib.js";
 import { checkProAccess, isFreeTierExcluded, isGateSatisfied, proGatedValue, selectProvidersForRun } from "./pro-gate-lib.js";
 import { loadRoutingRules } from "./routing-rules.js";
