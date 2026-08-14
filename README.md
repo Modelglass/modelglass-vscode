@@ -6,7 +6,7 @@ publishes independently to the Marketplace under its own extension ID.
 | Package | What it is | Marketplace |
 |---|---|---|
 | [`packages/router`](packages/router) | **Modelglass Cost-Aware Router** — routes dev tasks to the cheapest capable LLM (and generates video/audio) against your own provider keys, BYOK. | `modelglass.cost-aware-router` |
-| [`packages/mcp`](packages/mcp) | **Modelglass MCP** — registers the live Modelglass MCP server directly in Copilot's agent mode. | `modelglass.mcp` |
+| [`packages/mcp`](packages/mcp) | **Modelglass MCP** — registers the live Modelglass MCP server directly in Copilot's agent mode. | `modelglass.modelglass-mcp` |
 | [`packages/shared`](packages/shared) | Internal only, not published. SecretStorage-backed auth (`ensureApiKey`/`peekApiKey`) and the Modelglass API base URL, shared by both extensions above. | — |
 
 Both extensions use the same Modelglass account/API key (`packages/shared`'s

@@ -1,5 +1,5 @@
 {
-  "name": "mcp",
+  "name": "modelglass-mcp",
   "displayName": "Modelglass MCP",
   "description": "Registers the live Modelglass pricing/capability MCP server directly in Copilot's agent mode — no manual .vscode/mcp.json editing. Read-only tools (models, pricing history, competitors, account/tier info). Same Modelglass account as the Cost-Aware Router extension, but installable on its own.",
   "version": "0.1.0",
