@@ -11,13 +11,17 @@ API. There's no new server here — the server side is the same MCP endpoint
 Modelglass already runs; this just makes it discoverable without hand-editing
 config files.
 
+![Modelglass MCP answering a live pricing question in Copilot Chat](docs/screenshot.png)
+
 ## What you get
 
 Seven read-only tools, backed by the live Modelglass pricing feed:
 
 - List and search models across every tracked provider
 - Look up a specific model's current and historical pricing
-- Compare two models
+- Compare two or more models side-by-side
+- Get the current pricing feed in a routing-ready format
+- Get a benchmark-ranked model recommendation for a coding task category
 - Find a model's closest competitors
 - Check your own account/tier
 
