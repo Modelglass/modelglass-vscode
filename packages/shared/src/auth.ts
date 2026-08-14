@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { MODELGLASS_API } from "./lib.js";
+import { MODELGLASS_API } from "./config.js";
 
 /**
  * Replaces the upstream CLI's requireApiKey() (SCO-211) — that function reads
@@ -9,6 +9,10 @@ import { MODELGLASS_API } from "./lib.js";
  * persistence, silent auto-provisioning via POST /v1/keys/provision on first
  * use (same pattern the Modelglass iOS app already uses), and a manual
  * entry/reset path via the modelglass.setApiKey command.
+ *
+ * SCO-434 — moved here from the router package's src/auth.ts unchanged
+ * (only this import line changed) so both the router and the standalone
+ * MCP extension share one key lifecycle instead of two divergent copies.
  */
 
 const SECRET_KEY = "modelglassApiKey";

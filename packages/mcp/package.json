@@ -1,0 +1,52 @@
+{
+  "name": "mcp",
+  "displayName": "Modelglass MCP",
+  "description": "Registers the live Modelglass pricing/capability MCP server directly in Copilot's agent mode — no manual .vscode/mcp.json editing. Read-only tools (models, pricing history, competitors, account/tier info). Same Modelglass account as the Cost-Aware Router extension, but installable on its own.",
+  "version": "0.1.0",
+  "publisher": "modelglass",
+  "license": "MIT",
+  "type": "module",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Modelglass/modelglass-vscode",
+    "directory": "packages/mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/Modelglass/modelglass-vscode/issues"
+  },
+  "homepage": "https://github.com/Modelglass/modelglass-vscode/tree/main/packages/mcp#readme",
+  "engines": {
+    "vscode": "^1.104.0",
+    "node": ">=20"
+  },
+  "categories": ["Other", "Machine Learning"],
+  "keywords": ["mcp", "model context protocol", "pricing", "ai", "copilot", "agent"],
+  "activationEvents": [],
+  "main": "./dist/extension.cjs",
+  "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "modelglass.mcpServerProvider",
+        "label": "Modelglass"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "npm run build && vsce package",
+    "vscode:prepublish": "npm run build"
+  },
+  "dependencies": {
+    "@modelglass/vscode-shared": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.104.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}

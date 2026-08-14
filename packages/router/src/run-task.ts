@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ensureApiKey, output } from "./auth.js";
+import { ensureApiKey, output } from "@modelglass/vscode-shared";
 import type { LeafTaskCategory, RoutableModel } from "./routing-engine.js";
 import { promptAndSetProviderKey } from "./provider-keys.js";
 import { getConfiguredProviders } from "./provider-keys-lib.js";

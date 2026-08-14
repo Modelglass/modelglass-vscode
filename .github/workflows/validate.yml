@@ -7,8 +7,12 @@ on:
 
 jobs:
   validate:
-    name: Typecheck, test, build, package
+    name: Typecheck, test, build, package (${{ matrix.package }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [router, mcp]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -17,13 +21,44 @@ jobs:
         with:
           node-version: "20"
           cache: npm
+      # Installs + links all three workspace packages (router, mcp, shared)
+      # in one shot — npm workspaces, not per-package installs.
       - name: Install dependencies
         run: npm ci
       - name: Typecheck
-        run: npm run typecheck
+        run: npm run typecheck --workspace packages/${{ matrix.package }}
       - name: Run tests
-        run: npm test
+        run: npm run test --workspace packages/${{ matrix.package }} --if-present
       - name: Build (esbuild bundle)
-        run: npm run build
-      - name: Package dry-run (vsce)
+        run: npm run build --workspace packages/${{ matrix.package }}
+      - name: Package (vsce)
+        working-directory: packages/${{ matrix.package }}
         run: npx vsce package --no-dependencies
+      # SCO-430/433 hardening (SCO-434): that incident was a human-eyeballed
+      # .vscodeignore miss (.modelglass/ + a screenshots dir swept into a
+      # shipped .vsix, 8.77MB instead of ~1.5MB). Splitting into
+      # packages/router + packages/mcp removes the specific *cross-package*
+      # leak vector structurally (vsce's root is the package's own
+      # directory — it can't reach into a sibling package's tree at all),
+      # but each package can still leak ITS OWN stray local-dev files the
+      # same way #430/#433 did. This replaces "a human remembers to check"
+      # with a CI gate: fail the build if the packaged .vsix contains
+      # anything outside an explicit allowlist.
+      - name: Verify packaged .vsix contents against allowlist
+        working-directory: packages/${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          VSIX=$(ls ./*.vsix)
+          echo "Inspecting $VSIX"
+          unzip -Z1 "$VSIX" > /tmp/vsix-contents.txt
+          # Casing/extension matches vsce's actual output (verified against a
+          # real local package, not assumed): it lowercases readme.md and
+          # changelog.md and renames LICENSE -> LICENSE.txt.
+          ALLOW='^(\[Content_Types\]\.xml|extension\.vsixmanifest|extension/(package\.json|readme\.md|changelog\.md|LICENSE\.txt|icon\.png|icons/.*|docs/.*|dist/.*))$'
+          UNEXPECTED=$(grep -vE "$ALLOW" /tmp/vsix-contents.txt || true)
+          if [ -n "$UNEXPECTED" ]; then
+            echo "::error::Unexpected files in $VSIX — not on the allowlist:"
+            echo "$UNEXPECTED"
+            exit 1
+          fi
+          echo "OK — every entry in $VSIX matches the allowlist."

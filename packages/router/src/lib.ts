@@ -155,8 +155,15 @@ export interface NormalisedModel {
 // Modelglass API
 // ---------------------------------------------------------------------------
 
-export const MODELGLASS_API =
-  process.env.MODELGLASS_API ?? "https://modelglass-api.vercel.app";
+// SCO-434: moved to packages/shared (the MCP package needs it too) and
+// re-exported here so every existing `from "./lib.js"` import site in this
+// package keeps working unchanged. Imported from the package's `./config.js`
+// subpath specifically, NOT its default `.` entry (which also re-exports
+// auth.ts) — this file must stay `vscode`-free (see the file header above),
+// and auth.ts imports `vscode` at module scope, which would otherwise break
+// every test here run outside the Extension Host (plain node/tsx).
+export { MODELGLASS_API } from "@modelglass/vscode-shared/config.js";
+import { MODELGLASS_API } from "@modelglass/vscode-shared/config.js";
 
 export async function fetchLLMModels(apiKey: string): Promise<NormalisedModel[]> {
   const res = await fetch(`${MODELGLASS_API}/v1/models?modality=llm`, {

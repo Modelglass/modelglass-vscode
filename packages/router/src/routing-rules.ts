@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { output } from "./auth.js";
+import { output } from "@modelglass/vscode-shared";
 import { validateRoutingRulesConfig, type RoutingRule } from "./routing-rules-lib.js";
 import type { LeafTaskCategory } from "./routing-engine.js";
 

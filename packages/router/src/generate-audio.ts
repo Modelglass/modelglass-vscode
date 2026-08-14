@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { tmpdir } from "node:os";
-import { ensureApiKey, output } from "./auth.js";
+import { ensureApiKey, output } from "@modelglass/vscode-shared";
 import { checkProAccess, isFreeTierExcluded } from "./pro-gate-lib.js";
 import { getMediaProviderKey, setMediaProviderKey } from "./media-provider-keys-lib.js";
 import { fetchMediaModels, normaliseMediaOfferings, rankMediaModelsByPrice, type RoutableMediaModel } from "./media-routing-lib.js";
