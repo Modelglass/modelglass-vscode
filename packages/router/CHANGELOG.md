@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.3 — 2026-08-15
+
+Docs only, no functional change (SCO-449/SCO-450, #43). A readability pass
+on this listing itself: added a table of contents linking every section,
+standardized every feature section to the same "What it does" / "How to use
+it" pattern (including giving Compare Two Models, Generate Video, and
+Generate Audio their own sections — previously each was just one dense
+sentence in the Commands table, while Route Task/Run Task got full
+walkthroughs), and fixed a couple of headings that no longer matched their
+content ("Run Task on Cheapest Capable Model (BYOK router — Starter / Pro)"
+simplified to match its siblings; "Install" renamed "Install and Setup"
+since its subsections are setup steps, not just install instructions).
+
 ## 0.6.2 — 2026-08-14
 
 Docs only, no functional change. This is the first publish since the
