@@ -2,7 +2,7 @@
   "name": "cost-aware-router",
   "displayName": "Modelglass Cost-Aware Router",
   "description": "Route dev tasks to the cheapest capable LLM, and generate video (Runway) and audio (ElevenLabs) — all directly against your own provider keys (BYOK), no proxy — using the live Modelglass pricing feed.",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "publisher": "modelglass",
   "license": "MIT",
   "type": "module",
