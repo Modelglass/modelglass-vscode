@@ -6,8 +6,9 @@ pricing and capability feed. Since v0.3.0 it can also **execute the call
 directly against your own provider key** — a fully client-side, BYOK
 (bring-your-own-key) router: no Modelglass proxy in the request path, ever.
 **Since v0.6.0, it also generates video (via Runway) and audio (via
-ElevenLabs)** the same way — your own keys, no proxy — see **Generate
-Video**/**Generate Audio** in [Commands](#commands) below.
+ElevenLabs)** the same way — your own keys, no proxy — see
+[Generate Video](#generate-video-runway) and
+[Generate Audio](#generate-audio-elevenlabs) below.
 
 ![Modelglass: Route Task recommendation](https://raw.githubusercontent.com/Modelglass/modelglass-vscode/main/packages/router/docs/screenshot.png)
 
@@ -19,26 +20,50 @@ you supply. **Since v0.4.0, the router is also available directly inside
 Copilot Chat** — see [Use inside Copilot Chat](#use-inside-copilot-chat)
 below.
 
+## Table of contents
+
+- [Use inside Copilot Chat](#use-inside-copilot-chat)
+- [Route Task to Cheapest Capable Model](#route-task-to-cheapest-capable-model)
+- [Run Task on Cheapest Capable Model](#run-task-on-cheapest-capable-model)
+- [Compare Two Models](#compare-two-models)
+- [Generate Video (Runway)](#generate-video-runway)
+- [Generate Audio (ElevenLabs)](#generate-audio-elevenlabs)
+- [Install and Setup](#install-and-setup)
+- [Commands](#commands)
+- [Scope](#scope)
+- [Known limitations](#known-limitations)
+- [Relationship to `cost-aware-vscode-router`](#relationship-to-cost-aware-vscode-router)
+- [Development](#development)
+- [License](#license)
+
 ## Use inside Copilot Chat
 
-New in v0.4.0. Once a provider key is configured, open Copilot Chat's model
-picker and look for **Modelglass Router** — it lists 9 selectable models,
-one per Run Task's existing task category (Bug fix / debug, New code
-generation, Terminal/CLI/DevOps, Library-aware feature work, Refactor, Test
-generation, Documentation generation, Chat/explain, Autocomplete). Pick the
-one that matches what you're doing and chat normally — every message routes
+### What it does
+
+Brings Run Task's routing directly into Copilot Chat's model picker
+(**Modelglass Router**, new in v0.4.0) — 9 selectable models, one per Run
+Task's existing task category (Bug fix / debug, New code generation,
+Terminal/CLI/DevOps, Library-aware feature work, Refactor, Test generation,
+Documentation generation, Chat/explain, Autocomplete). Every message routes
 through the exact same ranking, Pro/Starter fallback chain, and
 `.modelglass/routing-rules.json` support as Run Task, using your own
 configured key(s), with no Modelglass proxy in the request path (ADR-0012,
-unchanged).
+unchanged). Deliberately no automatic task-classifier: nine explicit models,
+not one smart one, matching this extension's "explicit choice over hidden
+magic" philosophy for Run Task's own category picker.
 
-Deliberately no automatic task-classifier: nine explicit models, not one
-smart one, matching this extension's existing "explicit choice over hidden
-magic" philosophy for Run Task's own category picker. A model whose category
-has no routable model for your configured provider(s) right now still
-appears in the picker (never hidden — see [Provider API keys](#provider-api-keys)
-below for the same principle applied to key setup) and responds with a clear
-explanation instead of a routed answer.
+### How to use it
+
+1. Configure a provider key first (see [Provider API keys](#provider-api-keys)
+   below).
+2. Open Copilot Chat's model picker and select **Modelglass Router**.
+3. Pick the model matching what you're doing and chat normally.
+
+A model whose category has no routable model for your configured provider(s)
+right now still appears in the picker (never hidden — see
+[Provider API keys](#provider-api-keys) below for the same principle applied
+to key setup) and responds with a clear explanation instead of a routed
+answer.
 
 Requires VS Code 1.104 or newer. On an older VS Code, this integration
 silently doesn't register — every other command in this extension is
@@ -46,16 +71,48 @@ unaffected.
 
 ## Route Task to Cheapest Capable Model
 
-1. Run **Modelglass: Route Task to Cheapest Capable Model** from the Command Palette.
-2. Describe what you're about to do; the extension infers a starting task type
-   (coding / writing / general) from your active file's language — always
-   overridable.
-3. It fetches the current LLM pricing/capability feed and recommends the
-   cheapest model that clears the relevant quality bar — coding tasks are
-   ranked by SWE-bench Verified, writing/general tasks by
-   instruction-following rating. **Recommendation only — nothing is executed.**
+### What it does
 
-## Run Task on Cheapest Capable Model (BYOK router — Starter / Pro)
+Recommends the cheapest LLM that clears a confirmed benchmark bar for your
+task, using the live Modelglass pricing/capability feed — coding tasks
+ranked by SWE-bench Verified, writing/general tasks by instruction-following
+rating. **Recommendation only — nothing is executed, no provider key
+needed.**
+
+### How to use it
+
+1. Run **Modelglass: Route Task to Cheapest Capable Model** from the Command
+   Palette.
+2. Describe what you're about to do. The extension infers a starting task
+   type (coding / writing / general) from your active file's language —
+   always overridable.
+
+## Run Task on Cheapest Capable Model
+
+### What it does
+
+Executes a task against your own configured provider key(s) — a fully
+client-side, BYOK router with no Modelglass proxy in the request path. Ranks
+your configured provider's models against Modelglass's live
+benchmark/capability feed (SWE-bench Pro/Verified, Terminal-Bench 2.1, Aider
+Polyglot/LiveCodeBench, or BigCodeBench, depending on category — with a
+qualitative capability-rating fallback for categories no benchmark covers
+well) and **calls the cheapest model that still clears a quality bar**, using
+your own key — not simply the highest-scoring one regardless of price,
+matching this command's own name. Supports OpenAI, Anthropic, DeepSeek, xAI,
+Mistral, Groq, Together AI, and OpenRouter.
+
+Each of the five benchmark-scored categories has its own default bar
+(calibrated to that benchmark's real score range — e.g. 60% on SWE-bench
+Verified, 50% on Aider Polyglot); if every model in your configured
+provider(s) happens to fall below it, that's a sign the bar doesn't fit
+today's pool and the extension falls back to the highest-scoring model
+instead of reporting nothing. The feed is cached locally for ~5 minutes, so a
+brief Modelglass API blip doesn't block a Run Task call — a fetch failure
+past that window falls back to the last known-good feed instead of failing
+the run.
+
+### How to use it
 
 1. Configure a provider key first — **Modelglass: Set Provider API Key** (see
    [Provider API keys](#provider-api-keys) below).
@@ -64,57 +121,106 @@ unaffected.
    library-aware feature work, refactor, test generation, documentation
    generation, chat/explain, autocomplete), and describe the task. If you
    have an editor open, your current selection (or the whole file, if
-   nothing's selected) is automatically attached as context — the model
-   sees the code you're actually working on, not just your description of
-   it. No open editor: the task runs on your typed description alone,
-   exactly as before.
-3. The extension ranks your configured provider's models against
-   Modelglass's live benchmark/capability feed (SWE-bench Pro/Verified,
-   Terminal-Bench 2.1, Aider Polyglot/LiveCodeBench, or BigCodeBench,
-   depending on category — with a qualitative capability-rating fallback for
-   categories no benchmark covers well) and **calls the cheapest model that
-   still clears a quality bar**, using your own key — not simply the
-   highest-scoring one regardless of price, matching this command's own
-   name. Each of the five benchmark-scored categories has its own default
-   bar (calibrated to that benchmark's real score range — e.g. 60% on SWE-bench
-   Verified, 50% on Aider Polyglot); if every model in your configured
-   provider(s) happens to fall below it, that's a sign the bar doesn't fit
-   today's pool and the extension falls back to the highest-scoring model
-   instead of reporting nothing. Supports OpenAI, Anthropic, DeepSeek, xAI,
-   Mistral, Groq, Together AI, and OpenRouter. That feed is cached locally
-   for ~5 minutes, so a brief Modelglass API blip doesn't block a Run Task
-   call — a fetch failure past that window falls back to the last
-   known-good feed instead of failing the run. The response opens in its
-   own editor tab beside your code (not the Output channel) — labeled with
-   the category and model that produced it, and flagged if the provider
-   reports the response was cut off at its max output token limit.
-4. **Starter** (one configured key): one execution attempt. A failure
-   (invalid key, rate limit, network/provider error, or a request that
-   times out after 60s with no response) is reported clearly — no
-   automatic retry.
-5. **Pro** (multiple configured keys, via **Modelglass: Add Provider API
-   Key**): on a failure — including a timeout — automatically retries the
-   next-best-ranked model on a *different* configured provider (never the
-   same provider twice), up to one attempt per configured provider. Pro
-   also unlocks an optional `.modelglass/routing-rules.json` file in your
-   workspace to override the default ranking per category — exclude a
-   provider, force cheapest-first ignoring quality entirely, set an exact
-   model priority order, or set your own `minScore` (0–1) quality bar in
-   place of the built-in per-benchmark default described above.
-   `minScore`/`strategy`/`priority` only apply to the five benchmark-scored
-   categories (bug fix, new code generation, terminal/CLI, library-aware
-   feature work, refactor); `minScore` specifically is a no-op for the four
-   categories that fall back to a qualitative capability rating (those
-   already land on cheapest-among-the-top-rating-tier by default, since a
-   coarse rating scale ties far more often than a continuous benchmark
-   score). A Starter user with a `routing-rules.json` present, or
-   attempting to configure more than one provider key, gets a clear upgrade
-   prompt rather than a silent failure.
+   nothing's selected) is automatically attached as context — the model sees
+   the code you're actually working on, not just your description of it. No
+   open editor: the task runs on your typed description alone.
+3. The response opens in its own editor tab beside your code (not the Output
+   channel) — labeled with the category and model that produced it, and
+   flagged if the provider reports the response was cut off at its max
+   output token limit.
 
-## Install
+### Starter vs. Pro
 
-From the Marketplace (once published): search **Modelglass Cost-Aware
-Router** in VS Code's Extensions view, or run:
+- **Starter** (one configured key): one execution attempt. A failure
+  (invalid key, rate limit, network/provider error, or a request that times
+  out after 60s with no response) is reported clearly — no automatic retry.
+- **Pro** (multiple configured keys, via **Modelglass: Add Provider API
+  Key**): on a failure — including a timeout — automatically retries the
+  next-best-ranked model on a *different* configured provider (never the
+  same provider twice), up to one attempt per configured provider. Pro also
+  unlocks an optional `.modelglass/routing-rules.json` file in your
+  workspace to override the default ranking per category — exclude a
+  provider, force cheapest-first ignoring quality entirely, set an exact
+  model priority order, or set your own `minScore` (0–1) quality bar in
+  place of the built-in per-benchmark default described above.
+  `minScore`/`strategy`/`priority` only apply to the five benchmark-scored
+  categories (bug fix, new code generation, terminal/CLI, library-aware
+  feature work, refactor); `minScore` specifically is a no-op for the four
+  categories that fall back to a qualitative capability rating (those
+  already land on cheapest-among-the-top-rating-tier by default, since a
+  coarse rating scale ties far more often than a continuous benchmark
+  score). A Starter user with a `routing-rules.json` present, or attempting
+  to configure more than one provider key, gets a clear upgrade prompt
+  rather than a silent failure.
+
+## Compare Two Models
+
+### What it does
+
+A grounded migration diff between two models — reports the unit-matched
+price delta and price *stability* (from the append-only price history), a
+per-dimension capability diff, billing-unit change warnings, and lifecycle
+checks. Works across image/LLM/video/audio, and on every plan tier including
+Free.
+
+### How to use it
+
+1. Run **Modelglass: Compare Two Models** from the Command Palette.
+2. Pick a "from" model, then a "to" model — or accept one of the feed's own
+   suggested competitors.
+3. Read the diff in the **Modelglass** Output panel.
+
+![Modelglass: Compare Two Models diff output](https://raw.githubusercontent.com/Modelglass/modelglass-vscode/main/packages/router/docs/screenshot-compare.png)
+
+## Generate Video (Runway)
+
+### What it does
+
+Generates video via Runway, using your own Runway API key (BYOK, no proxy)
+— ranks Runway's video models cheapest-first from the live Modelglass feed.
+5 of the registry's 7 Runway entries are offered (see
+[Known limitations](#known-limitations)). Output ratio is a fixed 1280:720
+landscape default, not yet user-selectable. **Starter/Pro only**, same BYOK
+tiering as Run Task.
+
+### How to use it
+
+1. Configure a Runway provider key (see [Provider API keys](#provider-api-keys)
+   below).
+2. Run **Modelglass: Generate Video (Runway)**.
+3. Pick a model, then describe what you want — plus an input image/video
+   file, if the model needs one.
+4. The job submits and polls to completion with a cancellable progress
+   notification. The result saves to `.modelglass/generated/` and reveals
+   itself in the OS file explorer.
+
+## Generate Audio (ElevenLabs)
+
+### What it does
+
+Generates or transforms audio via ElevenLabs, using your own ElevenLabs API
+key (BYOK, no proxy). **Starter/Pro only**, same BYOK tiering as Run Task.
+
+### How to use it
+
+1. Configure an ElevenLabs provider key (see
+   [Provider API keys](#provider-api-keys) below).
+2. Run **Modelglass: Generate Audio (ElevenLabs)**.
+3. Choose a mode: **Text to Speech** (synchronous), **Dub Audio/Video**
+   (async, polled with a cancellable progress notification), or **Clone a
+   Voice** (Instant Voice Cloning, synchronous).
+4. TTS/dubbing results save to `.modelglass/generated/` and reveal
+   themselves in the OS file explorer; voice cloning reports the new voice
+   ID instead (it produces no file).
+
+ElevenLabs has no confirmed dubbing-cancel endpoint, so canceling a dubbing
+job only stops this extension from waiting — see
+[Known limitations](#known-limitations).
+
+## Install and Setup
+
+From the Marketplace: search **Modelglass Cost-Aware Router** in VS Code's
+Extensions view, or run:
 
 ```bash
 code --install-extension modelglass.cost-aware-router
@@ -169,15 +275,13 @@ today") right on each provider option, before you even paste a key.
 | Command | What it does |
 |---|---|
 | **Modelglass: Route Task to Cheapest Capable Model** | Prompts for a task description, then *recommends* the cheapest LLM that clears the relevant quality bar for it. Coding/writing/general only. Never calls a provider API. |
-| **Modelglass: Run Task on Cheapest Capable Model** | Prompts for a task category and description, then *executes* the call against the top-ranked model using your own configured provider key(s). See [Run Task](#run-task-on-cheapest-capable-model-byok-router--starter--pro) above. |
-| **Modelglass: Compare Two Models** | Grounded migration diff between two models — pick a "from" model, then a "to" model (or the feed's own suggested competitors). Reports the unit-matched price delta and price *stability* (from the append-only price history), a per-dimension capability diff, billing-unit change warnings, and lifecycle checks, in the **Modelglass** Output panel. Works across image/llm/video/audio, and on every plan tier including Free. |
+| **Modelglass: Run Task on Cheapest Capable Model** | Prompts for a task category and description, then *executes* the call against the top-ranked model using your own configured provider key(s). See [Run Task](#run-task-on-cheapest-capable-model) above. |
+| **Modelglass: Compare Two Models** | Grounded migration diff between two models — pick a "from" model, then a "to" model (or the feed's own suggested competitors). Reports the unit-matched price delta and price *stability* (from the append-only price history), a per-dimension capability diff, billing-unit change warnings, and lifecycle checks, in the **Modelglass** Output panel. Works across image/llm/video/audio, and on every plan tier including Free. See [Compare Two Models](#compare-two-models) above. |
 | **Modelglass: Set API Key** | Enter an existing free Modelglass API key, or clear the stored one (forcing re-provisioning on next use). |
 | **Modelglass: Set Provider API Key** | Starter: store a single provider key (LLM execution), replacing any previous one. |
 | **Modelglass: Add Provider API Key** | Pro: store an additional provider key alongside existing ones, for fallback chains. |
-| **Modelglass: Generate Video (Runway)** | Starter/Pro. Picks a Runway video model (ranked cheapest-first from the Modelglass feed — 5 of the registry's 7 Runway entries are offered, see [Known limitations](#known-limitations)), prompts for a text description (plus an input image/video file when the model needs one), submits the job, and polls to completion with a cancellable progress notification. Output ratio is a fixed 1280:720 landscape default, not yet user-selectable. Saves the result to `.modelglass/generated/` and reveals it in the OS file explorer. |
-| **Modelglass: Generate Audio (ElevenLabs)** | Starter/Pro. Choose Text to Speech (sync), Dub Audio/Video (async, polled with a cancellable progress notification — ElevenLabs has no confirmed dubbing-cancel endpoint, so canceling only stops this extension from waiting), or Clone a Voice (Instant Voice Cloning, sync). TTS/dubbing results save to `.modelglass/generated/` and reveal in the OS file explorer; voice cloning reports the new voice ID instead (it produces no file). |
-
-![Modelglass: Compare Two Models diff output](https://raw.githubusercontent.com/Modelglass/modelglass-vscode/main/packages/router/docs/screenshot-compare.png)
+| **Modelglass: Generate Video (Runway)** | Starter/Pro. Picks a Runway video model (ranked cheapest-first from the Modelglass feed), prompts for a text description (plus an input image/video file when the model needs one), submits the job, and polls to completion with a cancellable progress notification. See [Generate Video](#generate-video-runway) above. |
+| **Modelglass: Generate Audio (ElevenLabs)** | Starter/Pro. Choose Text to Speech (sync), Dub Audio/Video (async, polled with a cancellable progress notification), or Clone a Voice (Instant Voice Cloning, sync). See [Generate Audio](#generate-audio-elevenlabs) above. |
 
 ## Scope
 
