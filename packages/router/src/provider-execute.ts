@@ -275,6 +275,48 @@ async function executeOpenAiCompatible(
   return { text, modelIdUsed: modelId, usage, truncated };
 }
 
+/**
+ * SCO-625 -- the Messages API's `max_tokens` is a hard limit on ALL output,
+ * thinking plus response text. It was 8192 when no Claude model thought by
+ * default. Since Claude Opus 5 (thinking on by default when the request has
+ * no `thinking` field) and Opus 5.5 (thinking always on, can't be disabled),
+ * thinking tokens eat into that budget before any answer text is written.
+ *
+ * 16000: roughly double the old budget, and the value Anthropic's own
+ * Opus 5 / 5.5 migration-guide examples use. It's under the lowest max
+ * output of every Claude 4+ model (Opus 4 / 4.1 cap at 32K; the rest at
+ * 64K-128K), so it can't trigger a "max_tokens exceeds the model limit"
+ * 400. Only generated tokens are billed, so a higher cap doesn't cost more
+ * on normal responses. Larger values buy little here: DEFAULT_PROVIDER_TIMEOUT_MS
+ * (60s) usually ends a long generation before 16K tokens would. Anthropic
+ * suggests 64K+ only for xhigh/max effort, which this adapter never sets.
+ */
+export const ANTHROPIC_MAX_TOKENS = 16_000;
+
+/**
+ * SCO-625 -- the reply's text, read by block `type`, never by position.
+ * With thinking on, a response can begin with one or more `thinking`
+ * blocks before the first `text` block (their `thinking` field is empty at
+ * the default `display: "omitted"`). The old `content[0].text` read threw
+ * on every such response: that's every Opus 5 request with no `thinking`
+ * field and every Opus 5.5 request. Anthropic's Opus 5 migration guide
+ * names exactly this pattern as one that "breaks on these responses".
+ * Multiple text blocks (e.g. one split by citations) are concatenated in
+ * order, the documented way to reassemble them. Non-text blocks
+ * (`thinking`, `redacted_thinking`, anything newer) are ignored.
+ * Returns undefined when there's no text block at all.
+ */
+export function anthropicResponseText(content: unknown): string | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block && typeof block === "object" && block.type === "text" && typeof block.text === "string") {
+      parts.push(block.text);
+    }
+  }
+  return parts.length > 0 ? parts.join("") : undefined;
+}
+
 async function executeAnthropic(
   apiKey: string,
   modelId: string,
@@ -309,15 +351,10 @@ async function executeAnthropic(
       },
       body: JSON.stringify({
         model: modelId,
-        // SCO-330 (fix #4 bonus) -- was a hardcoded 4096 with stop_reason
-        // never checked, so a long doc-gen/test-gen response could be cut
-        // off mid-sentence with zero signal. 8192 is the Messages API's
-        // default max output ceiling without an extended-output beta
-        // header (not added here -- a bigger, separate change); the real
-        // fix is that a cut-off response is now DETECTABLE (see stop_reason
-        // parsing below), not just "make the cap high enough to rarely
-        // matter."
-        max_tokens: 8192,
+        // SCO-330 (fix #4 bonus) made a cut-off response DETECTABLE (see
+        // stop_reason parsing below). SCO-625 raised the cap itself now that
+        // thinking tokens count against it -- see ANTHROPIC_MAX_TOKENS.
+        max_tokens: ANTHROPIC_MAX_TOKENS,
         ...(systemText ? { system: systemText } : {}),
         messages: conversationMessages,
       }),
@@ -341,13 +378,27 @@ async function executeAnthropic(
   }
 
   const json = (await response.json()) as {
-    content?: Array<{ text?: string }>;
+    content?: Array<{ type?: string; text?: string }>;
     usage?: { input_tokens?: number; output_tokens?: number };
     stop_reason?: string;
   };
-  const text = json.content?.[0]?.text;
-  if (typeof text !== "string") {
-    throw new ProviderExecutionError("provider-error", "anthropic", "Response had no content[0].text.");
+  const text = anthropicResponseText(json.content);
+  if (text === undefined) {
+    const blockTypes = Array.isArray(json.content)
+      ? json.content.map((b) => b?.type ?? "untyped").join(", ") || "none"
+      : "none";
+    const reason = json.stop_reason ?? "unknown";
+    const hint =
+      reason === "max_tokens"
+        ? " The output limit was used up (most likely by thinking) before any answer text was written."
+        : reason === "refusal"
+          ? " The model declined the request."
+          : "";
+    throw new ProviderExecutionError(
+      "provider-error",
+      "anthropic",
+      `Response had no text content block (stop_reason: ${reason}; blocks: ${blockTypes}).${hint}`,
+    );
   }
   const usage =
     typeof json.usage?.input_tokens === "number" && typeof json.usage?.output_tokens === "number"

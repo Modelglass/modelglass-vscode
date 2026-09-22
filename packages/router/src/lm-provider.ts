@@ -76,9 +76,11 @@ function toMinimalMessages(messages: readonly vscode.LanguageModelChatRequestMes
  *  which real model actually answers a given pseudo-model is decided
  *  per-call by the router, not fixed at registration time. 128K covers
  *  every currently-supported provider's typical context window without
- *  overselling; maxOutputTokens matches provider-execute.ts's own Anthropic
- *  max_tokens ceiling (8192) so this at least isn't inconsistent with what
- *  the adapters actually request. */
+ *  overselling. maxOutputTokens stays at 8192 even though SCO-625 raised
+ *  provider-execute.ts's Anthropic max_tokens to 16000: that budget now
+ *  covers thinking PLUS answer text (Opus 5 thinks by default, Opus 5.5
+ *  always does), so 8192 of visible output is the conservative, honest
+ *  figure to advertise. */
 const SHARED_MAX_INPUT_TOKENS = 128_000;
 const SHARED_MAX_OUTPUT_TOKENS = 8_192;
 
