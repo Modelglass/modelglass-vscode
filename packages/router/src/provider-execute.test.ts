@@ -11,8 +11,10 @@ import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  ANTHROPIC_MAX_TOKENS,
   DEFAULT_PROVIDER_TIMEOUT_MS,
   ProviderExecutionError,
+  anthropicResponseText,
   executeProviderCall,
   resolveProviderModelId,
   type ChatMessage,
@@ -289,7 +291,7 @@ describe("executeProviderCall — multi-turn messages (SCO-331)", () => {
     const calls: Array<{ init: RequestInit }> = [];
     globalThis.fetch = (async (_url: string, init: RequestInit) => {
       calls.push({ init });
-      return jsonResponse(200, { content: [{ text: "hello there" }] });
+      return jsonResponse(200, { content: [{ type: "text", text: "hello there" }] });
     }) as typeof fetch;
 
     const conversation: ChatMessage[] = [
@@ -314,7 +316,7 @@ describe("executeProviderCall — multi-turn messages (SCO-331)", () => {
     const calls: Array<{ init: RequestInit }> = [];
     globalThis.fetch = (async (_url: string, init: RequestInit) => {
       calls.push({ init });
-      return jsonResponse(200, { content: [{ text: "hello there" }] });
+      return jsonResponse(200, { content: [{ type: "text", text: "hello there" }] });
     }) as typeof fetch;
 
     const conversation: ChatMessage[] = [{ role: "user", content: "hi" }];
@@ -339,11 +341,11 @@ describe("executeProviderCall — multi-turn messages (SCO-331)", () => {
 });
 
 describe("executeProviderCall — Anthropic adapter", () => {
-  test("happy path: posts to /v1/messages with x-api-key and returns content[0].text", async () => {
+  test("happy path: posts to /v1/messages with x-api-key and returns the text block's text", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     globalThis.fetch = (async (url: string, init: RequestInit) => {
       calls.push({ url, init });
-      return jsonResponse(200, { content: [{ text: "hello there" }] });
+      return jsonResponse(200, { content: [{ type: "text", text: "hello there" }] });
     }) as typeof fetch;
 
     const result = await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-sonnet-5", "hi");
@@ -357,7 +359,7 @@ describe("executeProviderCall — Anthropic adapter", () => {
   test("SCO-260 quick-win #2: parses usage.input_tokens/output_tokens into result.usage", async () => {
     globalThis.fetch = (async () =>
       jsonResponse(200, {
-        content: [{ text: "hello there" }],
+        content: [{ type: "text", text: "hello there" }],
         usage: { input_tokens: 45, output_tokens: 12 },
       })) as typeof fetch;
 
@@ -378,23 +380,24 @@ describe("executeProviderCall — Anthropic adapter", () => {
     );
   });
 
-  // SCO-330 (fix #4 bonus)
-  test("requests max_tokens: 8192, not the old hardcoded 4096", async () => {
+  // SCO-330 (fix #4 bonus), raised by SCO-625 now that thinking counts against it
+  test("requests max_tokens: ANTHROPIC_MAX_TOKENS (16000), not the old 8192", async () => {
     const calls: Array<{ init: RequestInit }> = [];
     globalThis.fetch = (async (_url: string, init: RequestInit) => {
       calls.push({ init });
-      return jsonResponse(200, { content: [{ text: "hi" }] });
+      return jsonResponse(200, { content: [{ type: "text", text: "hi" }] });
     }) as typeof fetch;
 
     await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-sonnet-5", "hi");
 
     const body = JSON.parse(calls[0]!.init.body as string);
-    assert.equal(body.max_tokens, 8192);
+    assert.equal(body.max_tokens, ANTHROPIC_MAX_TOKENS);
+    assert.equal(body.max_tokens, 16_000);
   });
 
   test("stop_reason: 'max_tokens' sets truncated: true", async () => {
     globalThis.fetch = (async () =>
-      jsonResponse(200, { content: [{ text: "cut off mid-sen" }], stop_reason: "max_tokens" })) as typeof fetch;
+      jsonResponse(200, { content: [{ type: "text", text: "cut off mid-sen" }], stop_reason: "max_tokens" })) as typeof fetch;
 
     const result = await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-sonnet-5", "hi");
 
@@ -403,7 +406,7 @@ describe("executeProviderCall — Anthropic adapter", () => {
 
   test("a present stop_reason other than 'max_tokens' (e.g. end_turn) sets truncated: false", async () => {
     globalThis.fetch = (async () =>
-      jsonResponse(200, { content: [{ text: "complete." }], stop_reason: "end_turn" })) as typeof fetch;
+      jsonResponse(200, { content: [{ type: "text", text: "complete." }], stop_reason: "end_turn" })) as typeof fetch;
 
     const result = await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-sonnet-5", "hi");
 
@@ -411,11 +414,115 @@ describe("executeProviderCall — Anthropic adapter", () => {
   });
 
   test("no stop_reason at all leaves truncated undefined", async () => {
-    globalThis.fetch = (async () => jsonResponse(200, { content: [{ text: "hi" }] })) as typeof fetch;
+    globalThis.fetch = (async () => jsonResponse(200, { content: [{ type: "text", text: "hi" }] })) as typeof fetch;
 
     const result = await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-sonnet-5", "hi");
 
     assert.equal(result.truncated, undefined);
+  });
+
+  // SCO-625 -- thinking on by default (Opus 5) / always on (Opus 5.5): the
+  // response leads with thinking blocks, so content[0] is not the answer.
+  test("SCO-625: a thinking block before the text block -- returns the text, ignores the thinking", async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(200, {
+        content: [
+          { type: "thinking", thinking: "", signature: "sig-abc" },
+          { type: "text", text: "the answer" },
+        ],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 20, output_tokens: 310 },
+      })) as typeof fetch;
+
+    const result = await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-opus-5-5", "hi");
+
+    assert.equal(result.text, "the answer");
+    assert.equal(result.modelIdUsed, "claude-opus-5-5");
+    assert.equal(result.truncated, false);
+    assert.deepEqual(result.usage, { inputTokens: 20, outputTokens: 310 });
+  });
+
+  test("SCO-625: several thinking blocks, including a summarized one and redacted_thinking, are all ignored", async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(200, {
+        content: [
+          { type: "thinking", thinking: "Let me work through this.", signature: "s1" },
+          { type: "redacted_thinking", data: "opaque" },
+          { type: "thinking", thinking: "", signature: "s2" },
+          { type: "text", text: "final" },
+        ],
+      })) as typeof fetch;
+
+    const result = await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-opus-5", "hi");
+
+    assert.equal(result.text, "final");
+    assert.ok(!result.text.includes("work through"), "thinking text must never leak into the answer");
+  });
+
+  test("SCO-625: multiple text blocks are concatenated in order", async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(200, {
+        content: [
+          { type: "thinking", thinking: "", signature: "s" },
+          { type: "text", text: "Part one, " },
+          { type: "text", text: "part two." },
+        ],
+      })) as typeof fetch;
+
+    const result = await executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-opus-5-5", "hi");
+
+    assert.equal(result.text, "Part one, part two.");
+  });
+
+  test("SCO-625: no text block at all -- a clear provider-error naming stop_reason and block types, not a crash", async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(200, {
+        content: [{ type: "thinking", thinking: "", signature: "s" }],
+        stop_reason: "max_tokens",
+      })) as typeof fetch;
+
+    await assert.rejects(
+      () => executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-opus-5-5", "hi"),
+      (e: unknown) => {
+        assert.ok(e instanceof ProviderExecutionError);
+        assert.equal(e.kind, "provider-error");
+        assert.equal(e.provider, "anthropic");
+        assert.match(e.message, /no text content block/);
+        assert.match(e.message, /stop_reason: max_tokens/);
+        assert.match(e.message, /blocks: thinking/);
+        assert.match(e.message, /used up .*before any answer text/);
+        return true;
+      },
+    );
+  });
+
+  test("SCO-625: a refusal with an empty content array -- clear provider-error, not a crash", async () => {
+    globalThis.fetch = (async () => jsonResponse(200, { content: [], stop_reason: "refusal" })) as typeof fetch;
+
+    await assert.rejects(
+      () => executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-opus-5-5", "hi"),
+      (e: unknown) => {
+        assert.ok(e instanceof ProviderExecutionError);
+        assert.equal(e.kind, "provider-error");
+        assert.match(e.message, /stop_reason: refusal; blocks: none/);
+        assert.match(e.message, /declined/);
+        return true;
+      },
+    );
+  });
+
+  test("SCO-625: a response with no content field at all -- provider-error, not a crash", async () => {
+    globalThis.fetch = (async () => jsonResponse(200, { id: "msg_1" })) as typeof fetch;
+
+    await assert.rejects(
+      () => executeProviderCall("anthropic", "sk-ant-test", "anthropic/claude-sonnet-5", "hi"),
+      (e: unknown) => {
+        assert.ok(e instanceof ProviderExecutionError);
+        assert.equal(e.kind, "provider-error");
+        assert.match(e.message, /stop_reason: unknown; blocks: none/);
+        return true;
+      },
+    );
   });
 });
 
@@ -427,6 +534,33 @@ describe("executeProviderCall — Anthropic adapter", () => {
 // setTimeout/AbortController wiring in provider-execute.ts, not a stand-in
 // for it.
 // ---------------------------------------------------------------------------
+describe("anthropicResponseText (SCO-625)", () => {
+  test("reads text blocks by type, skipping a leading thinking block", () => {
+    assert.equal(
+      anthropicResponseText([
+        { type: "thinking", thinking: "", signature: "s" },
+        { type: "text", text: "ok" },
+      ]),
+      "ok",
+    );
+  });
+
+  test("returns undefined for no text block, an empty array, or a non-array", () => {
+    assert.equal(anthropicResponseText([{ type: "thinking", thinking: "", signature: "s" }]), undefined);
+    assert.equal(anthropicResponseText([]), undefined);
+    assert.equal(anthropicResponseText(undefined), undefined);
+    assert.equal(anthropicResponseText({ type: "text", text: "not an array" }), undefined);
+  });
+
+  test("an untyped block is not treated as text -- the API always types its blocks", () => {
+    assert.equal(anthropicResponseText([{ text: "untyped" }]), undefined);
+  });
+
+  test("an empty-string text block is still text (a legitimately empty answer), not 'missing'", () => {
+    assert.equal(anthropicResponseText([{ type: "text", text: "" }]), "");
+  });
+});
+
 describe("executeProviderCall — timeout (SCO-262)", () => {
   function hangingFetch(): typeof fetch {
     return ((_url: string, init: RequestInit) => {

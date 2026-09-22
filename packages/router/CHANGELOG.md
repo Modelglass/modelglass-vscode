@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.4 — 2026-09-23
+
+Bug fix (SCO-625): **Run Task and Modelglass Chat failed on Claude Opus 5 and
+Claude Opus 5.5.** The Anthropic adapter read each reply as `content[0].text`.
+Since Opus 5, thinking is on by default (and on Opus 5.5 it's always on), so
+a response starts with one or more `thinking` blocks before the answer's
+`text` block. Every such request failed with "Response had no content[0].text."
+The adapter now reads text blocks by `type` for every Anthropic model, ignores
+thinking blocks, and joins multiple text blocks in order. Thinking never
+leaks into the output.
+
+- When a response has no text block at all, the error now says why: the
+  `stop_reason` and the block types received, plus a plain-English hint for
+  the two common cases (the output limit used up by thinking, or a refusal).
+  It's still a `provider-error`, so Pro's fallback chain moves to the next model.
+- The Anthropic `max_tokens` budget rises from 8192 to 16000, because
+  thinking tokens now count against it. Only generated tokens are billed, so
+  this doesn't raise the cost of normal responses.
+- The OpenAI-compatible adapter was checked for the same position-based
+  read. It reads `choices[0].message.content`, the standard single-choice
+  shape, so it isn't affected.
+
 ## 0.6.3 — 2026-08-15
 
 Docs only, no functional change (SCO-449/SCO-450, #43). A readability pass
