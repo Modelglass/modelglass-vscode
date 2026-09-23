@@ -22,6 +22,8 @@
  * benchmark was picked.
  */
 
+import { isRoutableOffering } from "./offering-status.js";
+
 // ---------------------------------------------------------------------------
 // Types — Modelglass feed (independent copy, see file header)
 // ---------------------------------------------------------------------------
@@ -55,6 +57,9 @@ export interface Offering {
   slug: string;
   provider: string;
   tiers: Tier[];
+  /** Lifecycle, as served by the Modelglass feed. SCO-633: `retired`
+   *  offerings are excluded from routing (see offering-status.ts). */
+  model?: { status?: string };
   /** SCO-283: the provider-native model string to call, when it genuinely
    *  differs from what resolveProviderModelId()'s heuristic would derive. */
   provider_model_id?: string;
@@ -202,7 +207,13 @@ export function normaliseOfferings(m: ModelEntry): RoutableModel[] {
   );
   const benchmarks = m.knowledge?.benchmarks ?? [];
 
-  if (m.offerings.length === 0) {
+  // SCO-633: never route to a retired offering. A model whose every
+  // offering is retired contributes nothing (NOT the zero-offering fallback
+  // below, which exists for pricing-less entries, not dead ones).
+  const offerings = m.offerings.filter(isRoutableOffering);
+  if (m.offerings.length > 0 && offerings.length === 0) return [];
+
+  if (offerings.length === 0) {
     return [
       {
         name: m.name,
@@ -217,7 +228,7 @@ export function normaliseOfferings(m: ModelEntry): RoutableModel[] {
     ];
   }
 
-  return m.offerings.map((offering) => ({
+  return offerings.map((offering) => ({
     name: m.name,
     slug: offering.slug,
     provider: offering.provider,

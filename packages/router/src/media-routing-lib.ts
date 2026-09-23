@@ -24,6 +24,8 @@
  * routeAndExecuteWithFallback.
  */
 
+import { isRoutableOffering } from "./offering-status.js";
+
 // ---------------------------------------------------------------------------
 // Types — Modelglass feed (independent copy, same "deliberately independent
 // module" precedent routing-engine.ts's own header already establishes for
@@ -149,7 +151,8 @@ function currentTierPrice(tiers: MediaTier[]): { amount: number; unit: string; c
  *  per model_id" reasoning as routing-engine.ts's normaliseOfferings (SCO-280)
  *  — a model could in principle be hosted by more than one provider. */
 export function normaliseMediaOfferings(entry: MediaModelEntry): RoutableMediaModel[] {
-  return entry.offerings.map((offering) => ({
+  // SCO-633: retired offerings are never routable (see offering-status.ts).
+  return entry.offerings.filter(isRoutableOffering).map((offering) => ({
     name: entry.name,
     slug: offering.slug,
     provider: offering.provider,

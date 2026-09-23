@@ -22,6 +22,15 @@ leaks into the output.
   read. It reads `choices[0].message.content`, the standard single-choice
   shape, so it isn't affected.
 
+Also in 0.6.4 (SCO-633): **retired models are never routed to.** Run Task,
+Modelglass Chat, Route Task and Generate Video / Generate Audio now skip any
+offering the Modelglass feed marks `retired` (e.g. Anthropic's Claude Sonnet 4
+and Opus 4, retired on the Claude API 2026-06-15; Claude 3.5 Haiku and 3.5
+Sonnet). Previously a retired model could still be picked. Its last price was
+still in the feed, so it could even look like the cheapest option, and the
+request would fail against the provider. `deprecated` models remain routable,
+because they keep working until their retirement date.
+
 ## 0.6.3 — 2026-08-15
 
 Docs only, no functional change (SCO-449/SCO-450, #43). A readability pass

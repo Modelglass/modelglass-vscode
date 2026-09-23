@@ -182,6 +182,32 @@ function makeModelEntry(overrides: Partial<ModelEntry> & { model_id: string }): 
 }
 
 describe("normalise", () => {
+  test("SCO-633: never selects a retired offering, even when it's the cheapest", () => {
+    const entry = makeModelEntry({
+      model_id: "acme/multi",
+      name: "Multi",
+      offerings: [
+        {
+          slug: "multi-cheap-retired",
+          provider: "cheaphost",
+          quality_tier: "standard",
+          model: { status: "retired" },
+          tiers: [{ id: "input", pricing: [{ amount: 0.1, currency: "USD", unit: "per_1m_tokens_input", effective_from: "2025-01-01" }] }],
+        },
+        {
+          slug: "multi-live",
+          provider: "livehost",
+          quality_tier: "standard",
+          model: { status: "ga" },
+          tiers: [{ id: "input", pricing: [{ amount: 2, currency: "USD", unit: "per_1m_tokens_input", effective_from: "2026-01-01" }] }],
+        },
+      ],
+    });
+    const n = normalise(entry);
+    assert.equal(n.provider, "livehost");
+    assert.equal(n.inputPricePerM, 2);
+  });
+
   test("carries the provider of the selected (cheapest) offering", () => {
     const entry = makeModelEntry({
       model_id: "anthropic/claude-sonnet-5",
