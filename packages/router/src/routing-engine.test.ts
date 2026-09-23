@@ -80,6 +80,41 @@ function makeModelEntry(overrides: Partial<ModelEntry> & { model_id: string; nam
 // ---------------------------------------------------------------------------
 
 describe("normaliseOfferings", () => {
+  // SCO-633 — a retired offering (e.g. Anthropic's claude-sonnet-4, retired
+  // 2026-06-15) must never become a routing candidate. Its price is closed
+  // out in the registry, but currentPrice() falls back to the last price, so
+  // without a status check it would still look routable, and cheap.
+  test("SCO-633: a retired offering is excluded; the model's other offerings remain", () => {
+    const entry = makeModelEntry({
+      model_id: "acme/multi",
+      name: "Multi",
+      offerings: [
+        makeOffering({ provider: "anthropic", slug: "multi-anthropic", model: { status: "retired" } }),
+        makeOffering({ provider: "openrouter", slug: "multi-openrouter", model: { status: "ga" } }),
+      ],
+    });
+    const result = normaliseOfferings(entry);
+    assert.deepEqual(result.map((r) => r.provider), ["openrouter"]);
+  });
+
+  test("SCO-633: a model whose every offering is retired produces NO routable entries (not the zero-offering fallback)", () => {
+    const entry = makeModelEntry({
+      model_id: "anthropic/claude-sonnet-4",
+      name: "Claude Sonnet 4",
+      offerings: [makeOffering({ provider: "anthropic", slug: "claude-sonnet-4-anthropic", model: { status: "retired" } })],
+    });
+    assert.deepEqual(normaliseOfferings(entry), []);
+  });
+
+  test("SCO-633: a deprecated offering is still routable (it works until its retirement date)", () => {
+    const entry = makeModelEntry({
+      model_id: "acme/old",
+      name: "Old",
+      offerings: [makeOffering({ provider: "openai", slug: "old-openai", model: { status: "deprecated" } })],
+    });
+    assert.equal(normaliseOfferings(entry).length, 1);
+  });
+
   test("a model with two provider offerings (the real case: llama-3.3-70b via Groq + Together) produces one entry per provider", () => {
     const entry = makeModelEntry({
       model_id: "meta/llama-3.3-70b",

@@ -113,6 +113,9 @@ export interface Offering {
   provider: string;
   quality_tier: string;
   tiers: Tier[];
+  /** Lifecycle, as served by the Modelglass feed. SCO-633: `retired`
+   *  offerings are never selected (see offering-status.ts). */
+  model?: { status?: string };
   /** SCO-283: the provider-native model string to call, when it genuinely
    *  differs from what resolveProviderModelId()'s heuristic would derive.
    *  Optional -- absent for the common case where the heuristic already
@@ -164,6 +167,7 @@ export interface NormalisedModel {
 // every test here run outside the Extension Host (plain node/tsx).
 export { MODELGLASS_API } from "@modelglass/vscode-shared/config.js";
 import { MODELGLASS_API } from "@modelglass/vscode-shared/config.js";
+import { isRoutableOffering } from "./offering-status.js";
 
 export async function fetchLLMModels(apiKey: string): Promise<NormalisedModel[]> {
   const res = await fetch(`${MODELGLASS_API}/v1/models?modality=llm`, {
@@ -175,7 +179,10 @@ export async function fetchLLMModels(apiKey: string): Promise<NormalisedModel[]>
   }
   const json = (await res.json()) as ApiResponse;
   if (!json.ok) throw new Error("Modelglass API returned ok=false");
-  return json.data.map(normalise);
+  // SCO-633: a model whose every offering is retired can't be routed to at all.
+  return json.data
+    .filter((m) => m.offerings.length === 0 || m.offerings.some(isRoutableOffering))
+    .map(normalise);
 }
 
 // ---------------------------------------------------------------------------
@@ -221,7 +228,7 @@ export function normalise(m: ModelEntry): NormalisedModel {
   const benchmarks = m.knowledge?.benchmarks;
   const { score: sweBenchVerified, source: sweBenchSource } = sweBenchVerifiedScore(benchmarks);
   const hasSweBenchPro = benchmarks?.some((b) => b.benchmark === "swe-bench-pro") ?? false;
-  const offering = [...m.offerings].sort(
+  const offering = [...m.offerings.filter(isRoutableOffering)].sort(
     (a, b) =>
       (currentPrice(a.tiers, "input") ?? Infinity) -
       (currentPrice(b.tiers, "input") ?? Infinity),

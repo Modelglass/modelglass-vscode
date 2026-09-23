@@ -39,6 +39,25 @@ describe("fetchMediaModels", () => {
 });
 
 describe("normaliseMediaOfferings", () => {
+  test("SCO-633: retired media offerings are excluded", () => {
+    const retired: MediaModelEntry = {
+      model_id: "runway/gen-3-alpha",
+      name: "Gen-3 Alpha",
+      offerings: [
+        {
+          slug: "gen-3-alpha-runway",
+          provider: "runway",
+          quality_tier: "standard",
+          model: { id: "runway/gen-3-alpha", modality: "text-to-video", status: "retired" },
+          tiers: [
+            { id: "standard", pricing: [{ amount: 0.05, currency: "USD", unit: "per_second", effective_from: "2025-01-01" }] },
+          ],
+        },
+      ],
+    };
+    assert.deepEqual(normaliseMediaOfferings(retired), []);
+  });
+
   const entry: MediaModelEntry = {
     model_id: "runway/gen-4-5",
     name: "Gen-4.5",
