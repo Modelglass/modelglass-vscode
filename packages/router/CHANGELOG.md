@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.5 — unreleased
+
+Bug fix (SCO-646): **model prices now match modelglass.com.au.** The
+extension now reads a model's headline price the same way the site and the
+MCP tools do (SCO-640): from its Standard tier, never from a discounted Batch,
+Flex or cached-input tier.
+
+- **Run Task, Modelglass Chat and Route Task** read the tier literally named
+  `input` / `output`. A model priced only on context-length tiers (e.g.
+  Inkling: `input-64k` / `input-256k`) came back unpriced, so it sorted last
+  on price even when it was among the cheapest. These models now use their
+  lowest base rate (Inkling: $1.87 / $4.68 per 1M tokens).
+- **Switch Check** compared the cheapest tier per unit, so a model with a
+  Batch tier was compared at its Batch rate (GPT-5.5 Pro: $15 / $90 instead
+  of its $30 / $180 list price). This skewed the price delta. It now compares
+  Standard rates.
+- **Generate Video / Generate Audio** apply the same rule. No video or audio
+  model has a discounted tier today, so nothing changes there yet.
+- The rule lives in one place (`headline-tier.ts`), shared by every pricing
+  path, the same way `offering-status.ts` is (SCO-633).
+
 ## 0.6.4 — 2026-09-23
 
 Bug fix (SCO-625): **Run Task and Modelglass Chat failed on Claude Opus 5 and

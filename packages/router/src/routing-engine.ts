@@ -23,6 +23,7 @@
  */
 
 import { isRoutableOffering } from "./offering-status.js";
+import { isHeadlineTier } from "./headline-tier.js";
 
 // ---------------------------------------------------------------------------
 // Types — Modelglass feed (independent copy, see file header)
@@ -50,6 +51,8 @@ export interface PricingEntry {
 
 export interface Tier {
   id: string;
+  /** e.g. `{ processing: "batch" }` on a discounted Batch/Flex tier (SCO-646). */
+  attributes?: Record<string, unknown>;
   pricing: PricingEntry[];
 }
 
@@ -168,17 +171,31 @@ export interface RoutableModel {
   providerModelId?: string;
 }
 
-/** Active price: the entry with no effective_to (still in force), falling
- *  back to the most recent by effective_from — mirrors switch-check-lib.ts's
- *  currentPrice() convention, applied here to whichever offering is cheapest
- *  on input price (same "pick the cheapest offering, then read its current
- *  price" two-step ./lib.ts's normalise() already uses). */
-function currentPrice(tiers: Tier[], id: string): number | null {
-  const tier = tiers.find((t) => t.id === id);
-  if (!tier || !tier.pricing.length) return null;
+/** Active price entry of one tier: the entry with no effective_to (still in
+ *  force), falling back to the most recent by effective_from — mirrors
+ *  switch-check-lib.ts's currentPrice() convention. */
+function activeEntry(tier: Tier): PricingEntry | null {
+  if (!tier.pricing.length) return null;
   const active = tier.pricing.find((p) => !p.effective_to);
-  if (active) return active.amount;
-  return [...tier.pricing].sort((a, b) => (a.effective_from > b.effective_from ? -1 : 1))[0]!.amount;
+  if (active) return active;
+  return [...tier.pricing].sort((a, b) => (a.effective_from > b.effective_from ? -1 : 1))[0]!;
+}
+
+/** SCO-646: an offering's headline price for one billing unit — the
+ *  cheapest active price across its headline tiers of that unit (see
+ *  ./headline-tier.ts). Previously this read the tier literally named
+ *  `input` / `output`, so a model priced only on context-length tiers
+ *  (inkling: `input-64k` / `input-256k`) came back unpriced and sorted last,
+ *  and a future Standard tier under any other name would have been missed. */
+export function headlinePrice(tiers: Tier[], unit: string): number | null {
+  let best: number | null = null;
+  for (const tier of tiers) {
+    if (!isHeadlineTier(tier)) continue;
+    const entry = activeEntry(tier);
+    if (!entry || entry.unit !== unit) continue;
+    if (best === null || entry.amount < best) best = entry.amount;
+  }
+  return best;
 }
 
 /**
@@ -235,8 +252,8 @@ export function normaliseOfferings(m: ModelEntry): RoutableModel[] {
     modelId: m.model_id,
     benchmarks,
     capability,
-    inputPricePerM: currentPrice(offering.tiers, "input"),
-    outputPricePerM: currentPrice(offering.tiers, "output"),
+    inputPricePerM: headlinePrice(offering.tiers, "per_1m_tokens_input"),
+    outputPricePerM: headlinePrice(offering.tiers, "per_1m_tokens_output"),
     providerModelId: offering.provider_model_id,
   }));
 }

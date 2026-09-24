@@ -18,7 +18,15 @@
  *
  * Keep this file's logic in sync with the upstream CLI's lib.ts by hand;
  * there's no published package to depend on instead (see SCO-193/SCO-216).
+ *
+ * SCO-646: isHeadlineTier() comes from ./headline-tier.ts (shared with every
+ * other pricing path in this extension) rather than a local copy; upstream
+ * pricing-math defines the identical function inline.
  */
+
+import { isHeadlineTier } from "./headline-tier.js";
+
+export { isHeadlineTier };
 
 // ---------------------------------------------------------------------------
 // Types — Modelglass feed
@@ -48,6 +56,8 @@ export interface PriceEntry {
 export interface Tier {
   id: string;
   label?: string;
+  /** e.g. `{ processing: "batch" }` on a discounted Batch/Flex tier (SCO-646). */
+  attributes?: Record<string, unknown>;
   pricing: PriceEntry[];
 }
 
@@ -216,11 +226,23 @@ export interface PriceComparison {
   toOnly: OfferPrice[];
 }
 
-/** All current prices for a model, one per offering×tier. */
+/** All current prices for a model, one per offering×tier — discounted
+ *  Batch/Flex/cached tiers included (see collectHeadlinePrices). */
 export function collectCurrentPrices(model: ModelEntry): OfferPrice[] {
+  return collectPrices(model, () => true);
+}
+
+/** Current prices from headline tiers only (see isHeadlineTier) — the rates
+ *  that compete in a "cheapest per unit" pick. */
+export function collectHeadlinePrices(model: ModelEntry): OfferPrice[] {
+  return collectPrices(model, isHeadlineTier);
+}
+
+function collectPrices(model: ModelEntry, include: (tier: Tier) => boolean): OfferPrice[] {
   const prices: OfferPrice[] = [];
   for (const off of model.offerings) {
     for (const tier of off.tiers) {
+      if (!include(tier)) continue;
       const p = currentPrice(tier);
       if (!p) continue;
       prices.push({
@@ -239,13 +261,14 @@ export function collectCurrentPrices(model: ModelEntry): OfferPrice[] {
 }
 
 /** Unit-matched price deltas: for every billing unit present on BOTH sides,
- *  compare the cheapest current price on each (apples-to-apples, same rule
- *  the API's own competitor ranking uses — it only computes a ratio when the
- *  units match). Units present on one side only are reported as-is, never
- *  converted. */
+ *  compare the cheapest current headline price on each (apples-to-apples,
+ *  same rule the API's own competitor ranking uses — it only computes a ratio
+ *  when the units match). Only headline tiers compete (SCO-646): a Batch rate
+ *  never stands in for the list price. Units present on one side only are
+ *  reported as-is, never converted. */
 export function comparePrices(fromModel: ModelEntry, toModel: ModelEntry): PriceComparison {
-  const fromPrices = collectCurrentPrices(fromModel);
-  const toPrices = collectCurrentPrices(toModel);
+  const fromPrices = collectHeadlinePrices(fromModel);
+  const toPrices = collectHeadlinePrices(toModel);
 
   const byUnit = (prices: OfferPrice[]) => {
     const m = new Map<string, OfferPrice[]>();

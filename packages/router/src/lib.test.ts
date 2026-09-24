@@ -12,7 +12,9 @@ import {
   type ModelEntry,
   type NormalisedModel,
   type Task,
+  type Tier,
   codingQualityBar,
+  headlinePrice,
   normalise,
   selectCodingModel,
   selectWritingModel,
@@ -268,5 +270,51 @@ describe("normalise", () => {
     const entry = makeModelEntry({ model_id: "orphan/model", name: "Orphan Model" });
     const result = normalise(entry);
     assert.equal(result.provider, "");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCO-646 — headline price comes from the Standard tier (the SCO-640 rule,
+// same as modelglass.com.au / the MCP tools). Fixtures mirror modelglass-llm:
+// gpt-5-5-pro-openai (Batch $15/$90 cheaper than Standard $30/$180) and
+// inkling-thinking-machines (context-length tiers only, no `input` tier).
+// ---------------------------------------------------------------------------
+
+function priced(id: string, amount: number, unit: string, attributes?: Record<string, unknown>): Tier {
+  return { id, ...(attributes ? { attributes } : {}), pricing: [{ amount, currency: "USD", unit, effective_from: "2026-01-01" }] };
+}
+
+const WITH_BATCH_TIERS = [
+  priced("batch-input", 15, "per_1m_tokens_input", { processing: "batch" }),
+  priced("batch-output", 90, "per_1m_tokens_output", { processing: "batch" }),
+  priced("input", 30, "per_1m_tokens_input"),
+  priced("output", 180, "per_1m_tokens_output"),
+];
+const CONTEXT_TIERS = [
+  priced("input-64k", 1.87, "per_1m_tokens_input"),
+  priced("output-64k", 4.68, "per_1m_tokens_output"),
+  priced("input-256k", 3.74, "per_1m_tokens_input"),
+  priced("output-256k", 9.36, "per_1m_tokens_output"),
+];
+
+function oneHost(model_id: string, tiers: Tier[]): ModelEntry {
+  return makeModelEntry({ model_id, offerings: [{ slug: "h", provider: "host", quality_tier: "premium", tiers }] });
+}
+
+describe("normalise headline price (SCO-646)", () => {
+  test("Batch cheaper than Standard: priced at Standard $30/$180", () => {
+    const r = normalise(oneHost("openai/gpt-5.5-pro", WITH_BATCH_TIERS));
+    assert.equal(r.inputPricePerM, 30);
+    assert.equal(r.outputPricePerM, 180);
+  });
+
+  test("context-length tiers only: priced at the base rate $1.87/$4.68, not null", () => {
+    const r = normalise(oneHost("thinking-machines/inkling", CONTEXT_TIERS));
+    assert.equal(r.inputPricePerM, 1.87);
+    assert.equal(r.outputPricePerM, 4.68);
+  });
+
+  test("headlinePrice is null when only a discounted tier has the unit", () => {
+    assert.equal(headlinePrice([priced("batch-input", 15, "per_1m_tokens_input", { processing: "batch" })], "per_1m_tokens_input"), null);
   });
 });

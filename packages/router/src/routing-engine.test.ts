@@ -663,3 +663,62 @@ describe("fetchLLMModels — timeout (SCO-260 quick-win #1)", () => {
     assert.equal(DEFAULT_MODELGLASS_FETCH_TIMEOUT_MS, 15_000);
   });
 });
+
+// ---------------------------------------------------------------------------
+// SCO-646 — headline price comes from the Standard tier (the SCO-640 rule,
+// same as modelglass.com.au / the MCP tools). Fixtures mirror modelglass-llm:
+// gpt-5-5-pro-openai (Batch $15/$90 cheaper than Standard $30/$180) and
+// inkling-thinking-machines (context-length tiers only, no `input` tier).
+// ---------------------------------------------------------------------------
+
+describe("normaliseOfferings headline price (SCO-646)", () => {
+  const p = (id: string, amount: number, unit: string, attributes?: Record<string, unknown>) => ({
+    id,
+    ...(attributes ? { attributes } : {}),
+    pricing: [{ amount, unit, effective_from: "2026-01-01" }],
+  });
+
+  test("Batch cheaper than Standard: priced at Standard $30/$180", () => {
+    const [m] = normaliseOfferings(
+      makeModelEntry({
+        model_id: "openai/gpt-5.5-pro",
+        name: "GPT-5.5 Pro",
+        offerings: [
+          makeOffering({
+            provider: "openai",
+            tiers: [
+              p("batch-input", 15, "per_1m_tokens_input", { processing: "batch" }),
+              p("batch-output", 90, "per_1m_tokens_output", { processing: "batch" }),
+              p("input", 30, "per_1m_tokens_input"),
+              p("output", 180, "per_1m_tokens_output"),
+            ],
+          }),
+        ],
+      }),
+    );
+    assert.equal(m!.inputPricePerM, 30);
+    assert.equal(m!.outputPricePerM, 180);
+  });
+
+  test("context-length tiers only: priced at $1.87/$4.68, not null (so it no longer sorts last)", () => {
+    const [m] = normaliseOfferings(
+      makeModelEntry({
+        model_id: "thinking-machines/inkling",
+        name: "Inkling",
+        offerings: [
+          makeOffering({
+            provider: "thinking-machines",
+            tiers: [
+              p("input-64k", 1.87, "per_1m_tokens_input"),
+              p("output-64k", 4.68, "per_1m_tokens_output"),
+              p("input-256k", 3.74, "per_1m_tokens_input"),
+              p("output-256k", 9.36, "per_1m_tokens_output"),
+            ],
+          }),
+        ],
+      }),
+    );
+    assert.equal(m!.inputPricePerM, 1.87);
+    assert.equal(m!.outputPricePerM, 4.68);
+  });
+});

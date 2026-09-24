@@ -144,3 +144,27 @@ describe("rankMediaModelsByPrice", () => {
     assert.deepEqual(ranked.map((m) => m.name), ["B", "A"]);
   });
 });
+
+// SCO-646 — defensive: no video/audio offering has a discounted tier today,
+// but a Batch tier must never become the routed price if one appears.
+describe("normaliseMediaOfferings headline price (SCO-646)", () => {
+  test("a cheaper batch- tier is ignored in favour of the standard tier", () => {
+    const entry: MediaModelEntry = {
+      model_id: "x/video",
+      name: "Video",
+      offerings: [
+        {
+          slug: "video-host",
+          provider: "host",
+          model: { id: "x/video", modality: "text-to-video", status: "ga" },
+          tiers: [
+            { id: "batch-standard", attributes: { processing: "batch" }, pricing: [{ amount: 0.05, currency: "USD", unit: "per_second", effective_from: "2026-01-01" }] },
+            { id: "standard", pricing: [{ amount: 0.1, currency: "USD", unit: "per_second", effective_from: "2026-01-01" }] },
+          ],
+        },
+      ],
+    };
+    const [model] = normaliseMediaOfferings(entry);
+    assert.equal(model!.price!.amount, 0.1);
+  });
+});

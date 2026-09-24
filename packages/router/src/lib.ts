@@ -105,6 +105,8 @@ export interface PricingEntry {
 
 export interface Tier {
   id: string;
+  /** e.g. `{ processing: "batch" }` on a discounted Batch/Flex tier (SCO-646). */
+  attributes?: Record<string, unknown>;
   pricing: PricingEntry[];
 }
 
@@ -168,6 +170,9 @@ export interface NormalisedModel {
 export { MODELGLASS_API } from "@modelglass/vscode-shared/config.js";
 import { MODELGLASS_API } from "@modelglass/vscode-shared/config.js";
 import { isRoutableOffering } from "./offering-status.js";
+import { isHeadlineTier } from "./headline-tier.js";
+
+export { isHeadlineTier };
 
 export async function fetchLLMModels(apiKey: string): Promise<NormalisedModel[]> {
   const res = await fetch(`${MODELGLASS_API}/v1/models?modality=llm`, {
@@ -217,6 +222,27 @@ export function currentPrice(tiers: Tier[], id: string): number | null {
   return tier.pricing[tier.pricing.length - 1].amount;
 }
 
+/**
+ * An offering's headline price for one billing unit: the cheapest current
+ * price across its headline tiers of that unit (e.g. `per_1m_tokens_input`;
+ * isHeadlineTier is in ./headline-tier.ts). Replaces reading the tier
+ * literally named `input`, which missed models priced only on context-length
+ * tiers (inkling: `input-64k` / `input-256k`) — SCO-646.
+ */
+export function headlinePrice(tiers: Tier[], unit: string): number | null {
+  let best: number | null = null;
+  for (const tier of tiers) {
+    if (!isHeadlineTier(tier) || !tier.pricing.length) continue;
+    const latest = tier.pricing[tier.pricing.length - 1];
+    if (latest.unit !== unit) continue;
+    if (best === null || latest.amount < best) best = latest.amount;
+  }
+  return best;
+}
+
+export const INPUT_UNIT = "per_1m_tokens_input";
+export const OUTPUT_UNIT = "per_1m_tokens_output";
+
 export function normalise(m: ModelEntry): NormalisedModel {
   const cap = m.knowledge?.capability_profile ?? [];
   let codingRating: string | null = null;
@@ -230,8 +256,8 @@ export function normalise(m: ModelEntry): NormalisedModel {
   const hasSweBenchPro = benchmarks?.some((b) => b.benchmark === "swe-bench-pro") ?? false;
   const offering = [...m.offerings.filter(isRoutableOffering)].sort(
     (a, b) =>
-      (currentPrice(a.tiers, "input") ?? Infinity) -
-      (currentPrice(b.tiers, "input") ?? Infinity),
+      (headlinePrice(a.tiers, INPUT_UNIT) ?? Infinity) -
+      (headlinePrice(b.tiers, INPUT_UNIT) ?? Infinity),
   )[0];
   return {
     name: m.name,
@@ -243,8 +269,8 @@ export function normalise(m: ModelEntry): NormalisedModel {
     sweBenchVerified,
     sweBenchSource,
     hasSweBenchPro,
-    inputPricePerM: offering ? currentPrice(offering.tiers, "input") : null,
-    outputPricePerM: offering ? currentPrice(offering.tiers, "output") : null,
+    inputPricePerM: offering ? headlinePrice(offering.tiers, INPUT_UNIT) : null,
+    outputPricePerM: offering ? headlinePrice(offering.tiers, OUTPUT_UNIT) : null,
   };
 }
 
