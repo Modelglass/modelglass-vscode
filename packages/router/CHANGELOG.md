@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.5 — unreleased
+## 0.6.5 — 2026-09-25
 
 Bug fix (SCO-646): **model prices now match modelglass.com.au.** The
 extension now reads a model's headline price the same way the site and the
