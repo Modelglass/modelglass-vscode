@@ -13,6 +13,7 @@ import {
   type Tier,
   currentPrice,
   collectCurrentPrices,
+  collectHeadlinePrices,
   comparePrices,
   analyzeHistory,
   analyzeModelHistory,
@@ -390,5 +391,62 @@ describe("lifecycleCheck", () => {
     const flags = lifecycleCheck(stale, TO_MODEL);
     assert.ok(flags.length > 0);
     assert.ok(flags.every((f) => f.side === "from" && f.severity === "info"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCO-646 — headline price comes from the Standard tier (the SCO-640 rule,
+// same as modelglass.com.au / the MCP tools). Fixtures mirror modelglass-llm:
+// gpt-5-5-pro-openai (Batch $15/$90 cheaper than Standard $30/$180) and
+// inkling-thinking-machines (context-length tiers only, no `input` tier).
+// ---------------------------------------------------------------------------
+
+describe("comparePrices headline tiers (SCO-646)", () => {
+  const t = (id: string, amount: number, unit: string, attributes?: Record<string, unknown>): Tier => ({
+    id,
+    ...(attributes ? { attributes } : {}),
+    pricing: [{ amount, currency: "USD", unit, effective_from: "2026-01-01" }],
+  });
+  const llm = (model_id: string, tiers: Tier[]): ModelEntry =>
+    makeModel({
+      model_id,
+      offerings: [{ slug: model_id, provider: "host", model: { id: model_id, modality: "text-generation", status: "ga", generation: "current" }, tiers }],
+    });
+  const WITH_BATCH = llm("openai/gpt-5.5-pro", [
+    t("input", 30, "per_1m_tokens_input"),
+    t("output", 180, "per_1m_tokens_output"),
+    t("batch-input", 15, "per_1m_tokens_input", { processing: "batch" }),
+    t("batch-output", 90, "per_1m_tokens_output", { processing: "batch" }),
+  ]);
+  const INKLING = llm("thinking-machines/inkling", [
+    t("input-64k", 1.87, "per_1m_tokens_input"),
+    t("output-64k", 4.68, "per_1m_tokens_output"),
+    t("input-256k", 3.74, "per_1m_tokens_input"),
+    t("output-256k", 9.36, "per_1m_tokens_output"),
+  ]);
+  const OTHER = llm("a/other", [t("input", 20, "per_1m_tokens_input"), t("output", 60, "per_1m_tokens_output")]);
+
+  test("Batch cheaper than Standard: compared at Standard $30/$180", () => {
+    const { shared, fromOnly, toOnly } = comparePrices(WITH_BATCH, OTHER);
+    assert.deepEqual(Object.fromEntries(shared.map((s) => [s.unit, s.from.amount])), {
+      per_1m_tokens_input: 30,
+      per_1m_tokens_output: 180,
+    });
+    assert.deepEqual([...fromOnly, ...toOnly], []);
+  });
+
+  test("delta is against Standard on the to-side (+50%, not -25%)", () => {
+    const input = comparePrices(OTHER, WITH_BATCH).shared.find((s) => s.unit === "per_1m_tokens_input")!;
+    assert.equal(input.delta_pct, 50);
+  });
+
+  test("context-length tiers only: lowest base rate $1.87", () => {
+    const input = comparePrices(INKLING, OTHER).shared.find((s) => s.unit === "per_1m_tokens_input")!;
+    assert.equal(input.from.amount, 1.87);
+  });
+
+  test("collectCurrentPrices keeps discounted tiers; collectHeadlinePrices drops them", () => {
+    assert.equal(collectCurrentPrices(WITH_BATCH).length, 4);
+    assert.deepEqual(collectHeadlinePrices(WITH_BATCH).map((p) => p.tier_id), ["input", "output"]);
   });
 });

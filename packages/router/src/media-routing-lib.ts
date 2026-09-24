@@ -25,6 +25,7 @@
  */
 
 import { isRoutableOffering } from "./offering-status.js";
+import { isHeadlineTier } from "./headline-tier.js";
 
 // ---------------------------------------------------------------------------
 // Types — Modelglass feed (independent copy, same "deliberately independent
@@ -42,6 +43,8 @@ export interface MediaPricingEntry {
 
 export interface MediaTier {
   id: string;
+  /** e.g. `{ processing: "batch" }` on a discounted tier (SCO-646). */
+  attributes?: Record<string, unknown>;
   pricing: MediaPricingEntry[];
 }
 
@@ -128,7 +131,8 @@ export interface RoutableMediaModel {
   modelId: string;
   subModality: string;
   qualityTier?: string;
-  /** The cheapest currently-active tier's price, or null if this offering
+  /** The cheapest currently-active headline tier's price (SCO-646: never a
+   *  discounted Batch/Flex tier — see ./headline-tier.ts), or null if this offering
    *  has no active price (mirrors routing-engine.ts's currentPrice —
    *  null-price offerings sort last, never dropped silently). */
   price: { amount: number; unit: string; currency: string } | null;
@@ -137,7 +141,7 @@ export interface RoutableMediaModel {
 function currentTierPrice(tiers: MediaTier[]): { amount: number; unit: string; currency: string } | null {
   let cheapest: { amount: number; unit: string; currency: string } | null = null;
   for (const tier of tiers) {
-    if (!tier.pricing.length) continue;
+    if (!tier.pricing.length || !isHeadlineTier(tier)) continue;
     const active = tier.pricing.find((p) => !p.effective_to);
     const chosen = active ?? [...tier.pricing].sort((a, b) => (a.effective_from > b.effective_from ? -1 : 1))[0]!;
     if (cheapest === null || chosen.amount < cheapest.amount) {
