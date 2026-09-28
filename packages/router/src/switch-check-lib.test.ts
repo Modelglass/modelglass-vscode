@@ -139,12 +139,12 @@ describe("currentPrice", () => {
     assert.equal(currentPrice(CUT_TIER)?.amount, 0.025);
   });
 
-  test("falls back to most recent when every entry is closed", () => {
+  test("no current price when every entry is closed (retired tier; SCO-663 — no fallback)", () => {
     const tier: Tier = {
       id: "t",
       pricing: CUT_TIER.pricing.map((p) => ({ ...p, effective_to: "2026-07-01" })),
     };
-    assert.equal(currentPrice(tier)?.amount, 0.025);
+    assert.equal(currentPrice(tier), null);
   });
 
   test("returns null on an empty history", () => {

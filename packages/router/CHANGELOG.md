@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+Bug fix (SCO-663): **routing uses a model's current price, not a superseded
+one.** The extension now reads a tier's current price the same way the site,
+API and MCP tools do (SCO-661): the latest row that has started and hasn't
+ended, where a later row supersedes an earlier one.
+
+- **Run Task, Modelglass Chat, Route Task, Switch Check, Generate Video and
+  Generate Audio** took a tier's *first* open price row, or its *last*
+  array entry. After a price change, that could be the old price: DeepSeek
+  V4-Pro routed at $0.435 per 1M input tokens instead of $1.32, so the
+  cheapest-capable ranking under-priced it about 3×. They now use the current
+  row.
+- A tier whose price has ended (a retired model) now has **no current price**
+  rather than its last one, so it sorts last on price.
+- **Switch Check's suggested competitors** skip a retired competitor and say
+  why (e.g. "no current price (retired or withdrawn; last price $0.44 / 1M
+  input tokens, until 2026-09-09)"), instead of diffing against it.
+
 ## 0.6.5 — 2026-09-25
 
 Bug fix (SCO-646): **model prices now match modelglass.com.au.** The
