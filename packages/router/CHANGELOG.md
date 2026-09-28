@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.6 (2026-09-28)
 
 Bug fix (SCO-663): **routing uses a model's current price, not a superseded
 one.** The extension now reads a tier's current price the same way the site,
