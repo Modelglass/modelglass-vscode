@@ -25,6 +25,7 @@
  */
 
 import { isRoutableOffering } from "./offering-status.js";
+import { activePrice } from "./active-price.js";
 import { isHeadlineTier } from "./headline-tier.js";
 
 // ---------------------------------------------------------------------------
@@ -141,9 +142,9 @@ export interface RoutableMediaModel {
 function currentTierPrice(tiers: MediaTier[]): { amount: number; unit: string; currency: string } | null {
   let cheapest: { amount: number; unit: string; currency: string } | null = null;
   for (const tier of tiers) {
-    if (!tier.pricing.length || !isHeadlineTier(tier)) continue;
-    const active = tier.pricing.find((p) => !p.effective_to);
-    const chosen = active ?? [...tier.pricing].sort((a, b) => (a.effective_from > b.effective_from ? -1 : 1))[0]!;
+    if (!isHeadlineTier(tier)) continue;
+    const chosen = activePrice(tier.pricing); // SCO-663: current row, null if retired
+    if (!chosen) continue;
     if (cheapest === null || chosen.amount < cheapest.amount) {
       cheapest = { amount: chosen.amount, unit: chosen.unit, currency: chosen.currency };
     }

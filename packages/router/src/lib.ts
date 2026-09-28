@@ -101,6 +101,9 @@ export interface PricingEntry {
   currency: string;
   unit: string;
   effective_from: string;
+  /** Inclusive last day; absent while open-ended (ADR-0002). */
+  effective_to?: string;
+  region?: string;
 }
 
 export interface Tier {
@@ -170,6 +173,7 @@ export interface NormalisedModel {
 export { MODELGLASS_API } from "@modelglass/vscode-shared/config.js";
 import { MODELGLASS_API } from "@modelglass/vscode-shared/config.js";
 import { isRoutableOffering } from "./offering-status.js";
+import { activePrice } from "./active-price.js";
 import { isHeadlineTier } from "./headline-tier.js";
 
 export { isHeadlineTier };
@@ -218,8 +222,9 @@ export function sweBenchVerifiedScore(
 
 export function currentPrice(tiers: Tier[], id: string): number | null {
   const tier = tiers.find((t) => t.id === id);
-  if (!tier || !tier.pricing.length) return null;
-  return tier.pricing[tier.pricing.length - 1].amount;
+  if (!tier) return null;
+  // SCO-663: the current row (./active-price.ts), not the last array element.
+  return activePrice(tier.pricing)?.amount ?? null;
 }
 
 /**
@@ -232,9 +237,9 @@ export function currentPrice(tiers: Tier[], id: string): number | null {
 export function headlinePrice(tiers: Tier[], unit: string): number | null {
   let best: number | null = null;
   for (const tier of tiers) {
-    if (!isHeadlineTier(tier) || !tier.pricing.length) continue;
-    const latest = tier.pricing[tier.pricing.length - 1];
-    if (latest.unit !== unit) continue;
+    if (!isHeadlineTier(tier)) continue;
+    const latest = activePrice(tier.pricing); // SCO-663: current row, not the last array element
+    if (!latest || latest.unit !== unit) continue;
     if (best === null || latest.amount < best) best = latest.amount;
   }
   return best;

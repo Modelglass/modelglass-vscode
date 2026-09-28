@@ -24,6 +24,7 @@
  * pricing-math defines the identical function inline.
  */
 
+import { activePrice } from "./active-price.js";
 import { isHeadlineTier } from "./headline-tier.js";
 
 export { isHeadlineTier };
@@ -112,7 +113,11 @@ export interface CompetitorEntry {
   model_id: string | null;
   model_name: string | null;
   provider: string | null;
+  /** Null for a retired/withdrawn competitor (modelglass #585, SCO-661). */
   current_price: { amount: number; currency: string; unit: string } | null;
+  /** Set only when current_price is null: its last price and last day. Never live. */
+  last_price?: { amount: number; currency: string; unit: string; effective_to: string | null } | null;
+  /** Null when either side has no current price, or the units differ. */
   price_delta_ratio: number | null;
   notes: string | null;
 }
@@ -184,15 +189,11 @@ export async function fetchTier(apiKey: string): Promise<KeyRecord["tier"]> {
 // Current-price resolution
 // ---------------------------------------------------------------------------
 
-/** The active price in a tier's pricing[] history — the entry with no
- *  effective_to (still in force), falling back to the most recent by
- *  effective_from. Mirrors packages/api's own currentPrice() convention so
- *  "current" means the same thing here as in the API's competitor ranking. */
-export function currentPrice(tier: Tier): PriceEntry | null {
-  const active = tier.pricing.find((p) => !p.effective_to);
-  if (active) return active;
-  if (!tier.pricing.length) return null;
-  return [...tier.pricing].sort((a, b) => (a.effective_from > b.effective_from ? -1 : 1))[0]!;
+/** The current price in a tier's pricing[] history (./active-price.ts,
+ *  SCO-663 — same rule as the API since modelglass #585). Null for a retired
+ *  tier; there's no "most recent row" fallback any more. */
+export function currentPrice(tier: Tier, today?: string): PriceEntry | null {
+  return activePrice(tier.pricing, today);
 }
 
 // ---------------------------------------------------------------------------

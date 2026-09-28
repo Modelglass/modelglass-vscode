@@ -23,6 +23,7 @@
  */
 
 import { isRoutableOffering } from "./offering-status.js";
+import { activePrice } from "./active-price.js";
 import { isHeadlineTier } from "./headline-tier.js";
 
 // ---------------------------------------------------------------------------
@@ -171,14 +172,10 @@ export interface RoutableModel {
   providerModelId?: string;
 }
 
-/** Active price entry of one tier: the entry with no effective_to (still in
- *  force), falling back to the most recent by effective_from — mirrors
- *  switch-check-lib.ts's currentPrice() convention. */
+/** Current price entry of one tier (./active-price.ts, SCO-663); null for a
+ *  retired tier. */
 function activeEntry(tier: Tier): PricingEntry | null {
-  if (!tier.pricing.length) return null;
-  const active = tier.pricing.find((p) => !p.effective_to);
-  if (active) return active;
-  return [...tier.pricing].sort((a, b) => (a.effective_from > b.effective_from ? -1 : 1))[0]!;
+  return activePrice(tier.pricing);
 }
 
 /** SCO-646: an offering's headline price for one billing unit — the
