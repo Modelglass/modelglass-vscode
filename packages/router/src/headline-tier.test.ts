@@ -22,4 +22,11 @@ describe("isHeadlineTier (SCO-646)", () => {
     assert.equal(isHeadlineTier({ id: "batch-input" }), false);
     assert.equal(isHeadlineTier({ id: "cached-input" }), false);
   });
+
+  test("rejects prompt-cache units whatever the tier id (ADR-0015)", () => {
+    assert.equal(isHeadlineTier({ id: "cached-input", pricing: [{ unit: "per_1m_tokens_cache_read" }] }), false);
+    assert.equal(isHeadlineTier({ id: "prompt-cache", pricing: [{ unit: "per_1m_tokens_cache_read" }] }), false);
+    assert.equal(isHeadlineTier({ id: "writes", pricing: [{ unit: "per_1m_tokens_cache_write" }] }), false);
+    assert.equal(isHeadlineTier({ id: "input", pricing: [{ unit: "per_1m_tokens_input" }] }), true);
+  });
 });
