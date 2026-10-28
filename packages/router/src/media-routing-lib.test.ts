@@ -168,3 +168,48 @@ describe("normaliseMediaOfferings headline price (SCO-646)", () => {
     assert.equal(model!.price!.amount, 0.1);
   });
 });
+
+describe("input-video seconds are never a routing price (SCO-813)", () => {
+  // Runway seedance2_5 at 720p: $0.30/s of output plus $0.15/s of input or
+  // reference video. currentTierPrice takes the cheapest headline tier across
+  // units, so without the guard the $0.15 add-on would become the price.
+  const seedance25: MediaModelEntry = {
+    model_id: "bytedance/seedance-2.5",
+    name: "Seedance 2.5",
+    offerings: [
+      {
+        slug: "seedance-2-5-runway",
+        provider: "runway",
+        quality_tier: "premium",
+        model: { id: "bytedance/seedance-2.5", modality: "text-to-video", status: "ga" },
+        tiers: [
+          { id: "input-video-720p", pricing: [{ amount: 0.15, currency: "USD", unit: "per_input_video_second", effective_from: "2026-01-01" }] },
+          { id: "standard-720p", pricing: [{ amount: 0.3, currency: "USD", unit: "per_second", effective_from: "2026-01-01" }] },
+        ],
+      },
+    ],
+  };
+
+  test("the offering's routing price is the $0.30/s output rate", () => {
+    const [m] = normaliseMediaOfferings(seedance25);
+    assert.deepEqual(m!.price, { amount: 0.3, unit: "per_second", currency: "USD" });
+  });
+
+  test("it ranks on the output rate against another video model", () => {
+    const other: MediaModelEntry = {
+      model_id: "runway/gen-4.5",
+      name: "Gen-4.5",
+      offerings: [
+        {
+          slug: "gen-4-5-runway",
+          provider: "runway",
+          quality_tier: "premium",
+          model: { id: "runway/gen-4.5", modality: "text-to-video", status: "ga" },
+          tiers: [{ id: "standard", pricing: [{ amount: 0.2, currency: "USD", unit: "per_second", effective_from: "2026-01-01" }] }],
+        },
+      ],
+    };
+    const ranked = rankMediaModelsByPrice([...normaliseMediaOfferings(seedance25), ...normaliseMediaOfferings(other)], "runway");
+    assert.deepEqual(ranked.map((m) => m.slug), ["gen-4-5-runway", "seedance-2-5-runway"]);
+  });
+});
