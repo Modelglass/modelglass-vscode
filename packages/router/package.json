@@ -106,7 +106,7 @@
   },
   "dependencies": {
     "@modelglass/vscode-shared": "*",
-    "modelglass-router-examples": "github:Modelglass/modelglass-router-examples#f8c5e3a22b504cb861b556bb3efc93586b745e58"
+    "modelglass-router-examples": "github:Modelglass/modelglass-router-examples#v0.5.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
