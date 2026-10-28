@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.0 (2026-10-28)
+
+**Prices that aren't a model's headline price are never used as one.** The
+extension now ranks and shows models on the same price the site, API and MCP
+tools use, including for two kinds of rate that are real but are never the
+price of a model on its own.
+
+- **Video input seconds (SCO-813).** Some video models charge per second of
+  input or reference video on top of the output price. Runway's Seedance 2.5
+  is $0.20 per second of 480p output, plus $0.10 per second of input video.
+  **Generate Video** took the cheapest price across a model's tiers, so it
+  could have ranked Seedance 2.5 at $0.10/s. It now ranks it at its $0.20/s
+  output rate, and **Switch Check** compares output rates only.
+- **Prompt-cache rates (SCO-641).** Cached-input and cache-write prices are
+  never a model's headline price, whatever the tier is called, in **Run Task,
+  Modelglass Chat, Route Task and Switch Check**.
+- **One shared list (SCO-653).** The extension no longer keeps its own copy of
+  these rules' unit list. It uses the one in Modelglass's open-source
+  router-examples `pricing-math` (v0.6.0), which is generated from the list the
+  site and API use, so the extension can't drift from them.
+
 ## 0.6.6 (2026-09-28)
 
 Bug fix (SCO-663): **routing uses a model's current price, not a superseded

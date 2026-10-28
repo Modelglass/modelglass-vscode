@@ -213,3 +213,34 @@ describe("input-video seconds are never a routing price (SCO-813)", () => {
     assert.deepEqual(ranked.map((m) => m.slug), ["gen-4-5-runway", "seedance-2-5-runway"]);
   });
 });
+
+describe("Runway Seedance 2.5 as live on /v1 (0.7.0 release check)", () => {
+  // The six tiers modelglass.com.au serves since 2026-10-28 (video-gen #104):
+  // output $0.20 / $0.30 / $0.68 per second, input video $0.10 / $0.15 / $0.34.
+  const row = (amount: number, unit: string) => [{ amount, currency: "USD", unit, effective_from: "2026-10-27" }];
+  const live: MediaModelEntry = {
+    model_id: "bytedance/seedance-2.5",
+    name: "Seedance 2.5",
+    offerings: [
+      {
+        slug: "seedance-2-5-runway",
+        provider: "runway",
+        quality_tier: "premium",
+        model: { id: "bytedance/seedance-2.5", modality: "text-to-video", status: "ga" },
+        tiers: [
+          { id: "standard-480p", pricing: row(0.2, "per_second") },
+          { id: "standard-720p", pricing: row(0.3, "per_second") },
+          { id: "standard-1080p", pricing: row(0.68, "per_second") },
+          { id: "input-video-480p", pricing: row(0.1, "per_input_video_second") },
+          { id: "input-video-720p", pricing: row(0.15, "per_input_video_second") },
+          { id: "input-video-1080p", pricing: row(0.34, "per_input_video_second") },
+        ],
+      },
+    ],
+  };
+
+  test("routes at $0.20/s (cheapest output), never the $0.10/s input-video rate", () => {
+    const [m] = rankMediaModelsByPrice(normaliseMediaOfferings(live), "runway");
+    assert.deepEqual(m!.price, { amount: 0.2, unit: "per_second", currency: "USD" });
+  });
+});
