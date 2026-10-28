@@ -4,7 +4,8 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { isHeadlineTier } from "./headline-tier.js";
+import * as PricingMath from "modelglass-router-examples/pricing-math";
+import { isHeadlineTier, NON_HEADLINE_UNITS } from "./headline-tier.js";
 
 describe("isHeadlineTier (SCO-646)", () => {
   test("accepts standard and context-length tiers", () => {
@@ -28,5 +29,16 @@ describe("isHeadlineTier (SCO-646)", () => {
     assert.equal(isHeadlineTier({ id: "prompt-cache", pricing: [{ unit: "per_1m_tokens_cache_read" }] }), false);
     assert.equal(isHeadlineTier({ id: "writes", pricing: [{ unit: "per_1m_tokens_cache_write" }] }), false);
     assert.equal(isHeadlineTier({ id: "input", pricing: [{ unit: "per_1m_tokens_input" }] }), true);
+  });
+});
+
+describe("NON_HEADLINE_UNITS (SCO-653)", () => {
+  test("is pricing-math's list (generated from @modelglass/core), not a copy", () => {
+    assert.equal(NON_HEADLINE_UNITS, PricingMath.NON_HEADLINE_UNITS);
+  });
+  test("every unit on it makes a tier non-headline, whatever the tier is called", () => {
+    for (const unit of PricingMath.NON_HEADLINE_UNIT_LIST) {
+      assert.equal(isHeadlineTier({ id: "input", pricing: [{ unit }] }), false, unit);
+    }
   });
 });

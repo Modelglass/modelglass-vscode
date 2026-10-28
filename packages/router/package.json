@@ -105,7 +105,8 @@
     "vscode:prepublish": "npm run build"
   },
   "dependencies": {
-    "@modelglass/vscode-shared": "*"
+    "@modelglass/vscode-shared": "*",
+    "modelglass-router-examples": "github:Modelglass/modelglass-router-examples#v0.5.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
