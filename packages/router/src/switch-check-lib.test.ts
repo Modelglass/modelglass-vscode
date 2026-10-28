@@ -449,4 +449,18 @@ describe("comparePrices headline tiers (SCO-646)", () => {
     assert.equal(collectCurrentPrices(WITH_BATCH).length, 4);
     assert.deepEqual(collectHeadlinePrices(WITH_BATCH).map((p) => p.tier_id), ["input", "output"]);
   });
+
+  // SCO-813: Runway seedance2_5 at 720p, $0.30/s output + $0.15/s input video.
+  const SEEDANCE_25 = llm("bytedance/seedance-2.5", [
+    t("input-video-720p", 0.15, "per_input_video_second"),
+    t("standard-720p", 0.3, "per_second"),
+  ]);
+  const OTHER_VIDEO = llm("a/other-video", [t("standard", 0.4, "per_second")]);
+
+  test("SCO-813: the previous price is the output rate; input-video seconds never compete", () => {
+    assert.deepEqual(collectHeadlinePrices(SEEDANCE_25).map((p) => [p.tier_id, p.amount]), [["standard-720p", 0.3]]);
+    const { shared, fromOnly, toOnly } = comparePrices(SEEDANCE_25, OTHER_VIDEO);
+    assert.deepEqual(shared.map((s) => [s.unit, s.from.amount, s.to.amount]), [["per_second", 0.3, 0.4]]);
+    assert.deepEqual([...fromOnly, ...toOnly], []);
+  });
 });
