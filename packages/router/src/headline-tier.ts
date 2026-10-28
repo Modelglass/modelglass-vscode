@@ -16,8 +16,14 @@
  *
  * Identical to modelglass.com.au / the MCP tools (@modelglass/core
  * isHeadlineTier) and upstream modelglass-router-examples (pricing-math and
- * cost-aware-vscode-router's lib.ts). Keep them in sync by hand.
+ * cost-aware-vscode-router's lib.ts). SCO-653: the unit list isn't copied
+ * here; it's imported from pricing-math (generated from @modelglass/core,
+ * pinned in package.json, bundled by esbuild). Keep the rest in sync by hand.
  */
+import { NON_HEADLINE_UNITS } from "modelglass-router-examples/pricing-math";
+
+export { NON_HEADLINE_UNITS };
+
 export interface HasTierIdentity {
   id: string;
   attributes?: Record<string, unknown>;
@@ -26,10 +32,8 @@ export interface HasTierIdentity {
 
 const NON_HEADLINE_TIER_ID = /^(batch|flex|cached|cache)-/;
 
-/** ADR-0015: prompt-cache units are never a headline price, whatever the
+/** ADR-0015 etc.: a non-headline unit is never a headline price, whatever the
  *  tier is called (second guard alongside the tier-id prefix). */
-const NON_HEADLINE_UNITS: ReadonlySet<string> = new Set(["per_1m_tokens_cache_read", "per_1m_tokens_cache_write"]);
-
 export function isHeadlineTier(tier: HasTierIdentity): boolean {
   const processing = tier.attributes?.processing;
   if (processing !== undefined && processing !== null && processing !== "standard") return false;
