@@ -234,6 +234,37 @@ describe("analyzeHistory", () => {
     assert.equal(h.previous?.delta_pct, 50);
   });
 
+  test("a same-price row isn't a change: previous is the last different price (pricing-math v0.7.0)", () => {
+    // Whisper Large v3 on Groq (2026-10-29): the 09-30 row only re-cited a new
+    // source at the same $0.00185/min, and read as a 0% "raise".
+    const row = (amount: number, from: string, to?: string) => ({
+      amount, currency: "USD", unit: "per_minute", effective_from: from, ...(to ? { effective_to: to } : {}),
+    });
+    const later = new Date("2026-10-29T00:00:00Z");
+    const recite: Tier = { id: "audio-minutes", pricing: [row(0.00185, "2024-10-01", "2026-09-29"), row(0.00185, "2026-09-30")] };
+    assert.equal(analyzeHistory("groq", recite, later)!.previous, null);
+    const changed: Tier = { id: "t", pricing: [row(1, "2026-01-01", "2026-01-31"), row(2, "2026-02-01", "2026-02-28"), row(2, "2026-03-01")] };
+    const c = analyzeHistory("x", changed, later)!;
+    assert.equal(c.previous?.amount, 1);
+    assert.equal(c.previous?.direction, "raise");
+    assert.equal(c.previous?.delta_pct, 100);
+  });
+
+  test("previous stays within the same unit and region, and a future row is never current", () => {
+    const later = new Date("2026-10-29T00:00:00Z");
+    const tier: Tier = {
+      id: "t",
+      pricing: [
+        { amount: 5, currency: "USD", unit: "per_image", effective_from: "2026-01-01" },
+        { amount: 3, currency: "USD", unit: "per_minute", effective_from: "2026-02-01" },
+        { amount: 9, currency: "USD", unit: "per_minute", effective_from: "2026-12-01" },
+      ],
+    };
+    const h = analyzeHistory("x", tier, later)!;
+    assert.equal(h.current.amount, 3);
+    assert.equal(h.previous, null);
+  });
+
   test("returns null for a tier with no pricing at all", () => {
     assert.equal(analyzeHistory("x", { id: "t", pricing: [] }, today), null);
   });
