@@ -49,6 +49,9 @@ export interface PriceEntry {
   amount: number;
   currency: string;
   unit: string;
+  /** Absent means global. A later row supersedes an earlier one only within
+   *  the same region, currency and unit (ADR-0002). */
+  region?: string;
   effective_from: string;
   effective_to?: string;
   source?: PriceSource;
@@ -331,7 +334,10 @@ export interface HistoryAnalysis {
     age_days: number;
     source_url?: string;
   };
-  /** The entry the current price superseded, when the window shows it. */
+  /** The price the current one superseded, when the window shows it: the
+   *  latest earlier row with a different amount. A same-price row (a
+   *  re-cite of a new source, say) supersedes nothing, so it never reads as
+   *  a 0% "raise". */
   previous: {
     amount: number;
     effective_from: string;
@@ -346,18 +352,31 @@ export function daysBetween(fromIso: string, to: Date): number {
   return Math.max(0, Math.floor((to.getTime() - from.getTime()) / 86_400_000));
 }
 
+const priceScope = (p: PriceEntry) => `${p.region ?? "global"}\0${p.currency}\0${p.unit}`;
+
 /** Stability analysis for one offering×tier, computed from whatever slice of
- *  the append-only pricing[] history the caller's plan window exposes. */
+ *  the append-only pricing[] history the caller's plan window exposes.
+ *  Same rule as pricing-math v0.7.0 (modelglass-router-examples): `today`
+ *  decides which row is current; "previous" is the latest earlier row in the
+ *  same region/currency/unit whose amount differs from the current one (a
+ *  same-price row isn't a price change); a scheduled future row is never
+ *  previous or current. */
 export function analyzeHistory(
   provider: string,
   tier: Tier,
   today: Date = new Date(),
 ): HistoryAnalysis | null {
-  const cur = currentPrice(tier);
+  const cur = currentPrice(tier, today.toISOString().slice(0, 10));
   if (!cur) return null;
-  const sorted = [...tier.pricing].sort((a, b) => (a.effective_from > b.effective_from ? -1 : 1));
-  const curIdx = sorted.indexOf(cur);
-  const prev = curIdx >= 0 ? (sorted[curIdx + 1] ?? null) : null;
+  const earlier = tier.pricing
+    .filter(
+      (p) =>
+        priceScope(p) === priceScope(cur) &&
+        p.effective_from < cur.effective_from &&
+        p.amount !== cur.amount,
+    )
+    .sort((a, b) => a.effective_from.localeCompare(b.effective_from));
+  const prev = earlier[earlier.length - 1] ?? null;
   return {
     provider,
     tier_id: tier.id,
