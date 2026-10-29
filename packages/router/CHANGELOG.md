@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.1 (unreleased)
+## 0.7.1 (2026-10-29)
 
 Bug fix (SCO-835): **Switch Check's price history no longer calls a same-price
 re-cite a price rise.** When Modelglass re-recorded a price from a new source
@@ -15,6 +15,13 @@ follows the same rule as Modelglass's API and MCP tools (router-examples
   another unit is never reported as the previous price;
 - the current price is the row in effect on the day you run the check, so a
   price scheduled for a later date is never shown as current.
+
+And **Switch Check now says how long a price has actually held.** Each tier's
+line reads "since <date> (N days)" from the start of its unbroken run at that
+price, not from the newest row: Whisper Large v3 on Groq shows "since
+2024-10-01 (758 days), re-confirmed 2026-09-30" instead of "since 2026-09-30
+(29 days)". This is the same `stable_since` that Modelglass's MCP
+`compare_models` now returns (router-examples `pricing-math` v0.8.0).
 
 ## 0.7.0 (2026-10-28)
 
