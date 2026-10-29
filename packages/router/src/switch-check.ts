@@ -17,6 +17,7 @@ import {
   fmtPrice,
   fmtPct,
   hr,
+  daysBetween,
 } from "./switch-check-lib.js";
 
 /**
@@ -183,9 +184,12 @@ function printDiff(fromModel: ModelEntry, toModel: ModelEntry, tier: KeyRecord["
     output.appendLine(`  [${label}] ${model.name}:`);
     for (const h of analyzeModelHistory(model, today)) {
       const cur = h.current;
+      // SCO-835: "since" is how long the price has held (stable_since); a
+      // newer row that only re-cited the same price is noted, not counted.
       let line =
         `    ${h.provider}/${h.tier_id}: ${fmtPrice(cur.amount, cur.unit)} since ` +
-        `${cur.effective_from} (${cur.age_days} days)`;
+        `${cur.stable_since} (${daysBetween(cur.stable_since, today)} days)` +
+        (cur.stable_since !== cur.effective_from ? `, re-confirmed ${cur.effective_from}` : "");
       if (h.previous) {
         const p = h.previous;
         line +=
