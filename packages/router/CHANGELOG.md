@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.1 (unreleased)
+
+Bug fix (SCO-835): **Switch Check's price history no longer calls a same-price
+re-cite a price rise.** When Modelglass re-recorded a price from a new source
+at the same amount, Switch Check's stability section read it as a 0% "RAISE".
+Whisper Large v3 on Groq showed this: its price has been $0.00185 per minute
+since 2024-10-01, re-cited from a new Groq page on 2026-09-30. The section now
+follows the same rule as Modelglass's API and MCP tools (router-examples
+`pricing-math` v0.7.0):
+
+- the previous price is the last *different* price, never a same-price row;
+- it's compared only within the same unit, currency and region, so a row in
+  another unit is never reported as the previous price;
+- the current price is the row in effect on the day you run the check, so a
+  price scheduled for a later date is never shown as current.
+
 ## 0.7.0 (2026-10-28)
 
 **Prices that aren't a model's headline price are never used as one.** The
