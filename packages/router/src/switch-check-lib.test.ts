@@ -265,6 +265,23 @@ describe("analyzeHistory", () => {
     assert.equal(h.previous, null);
   });
 
+  test("stable_since: a re-cite doesn't restart it; a change, a gap or another unit does (pricing-math v0.8.0)", () => {
+    const row = (amount: number, unit: string, from: string, to?: string) => ({
+      amount, currency: "USD", unit, effective_from: from, ...(to ? { effective_to: to } : {}),
+    });
+    const later = new Date("2026-10-29T00:00:00Z");
+    const recite: Tier = { id: "audio-minutes", pricing: [row(0.00185, "per_minute", "2024-10-01", "2026-09-29"), row(0.00185, "per_minute", "2026-09-30")] };
+    const h = analyzeHistory("groq", recite, later)!;
+    assert.equal(h.current.effective_from, "2026-09-30");
+    assert.equal(h.current.stable_since, "2024-10-01");
+    const changed: Tier = { id: "t", pricing: [row(1, "per_minute", "2026-01-01", "2026-01-31"), row(2, "per_minute", "2026-02-01", "2026-02-28"), row(2, "per_minute", "2026-03-01")] };
+    assert.equal(analyzeHistory("x", changed, later)!.current.stable_since, "2026-02-01");
+    const gap: Tier = { id: "t", pricing: [row(2, "per_minute", "2026-02-01", "2026-02-10"), row(2, "per_minute", "2026-03-01")] };
+    assert.equal(analyzeHistory("x", gap, later)!.current.stable_since, "2026-03-01");
+    const units: Tier = { id: "t", pricing: [row(2, "per_image", "2026-01-01", "2026-02-28"), row(2, "per_minute", "2026-03-01")] };
+    assert.equal(analyzeHistory("x", units, later)!.current.stable_since, "2026-03-01");
+  });
+
   test("returns null for a tier with no pricing at all", () => {
     assert.equal(analyzeHistory("x", { id: "t", pricing: [] }, today), null);
   });
