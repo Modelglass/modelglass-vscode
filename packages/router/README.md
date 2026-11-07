@@ -129,9 +129,11 @@ the run.
    flagged if the provider reports the response was cut off at its max
    output token limit.
 
-### Starter vs. Pro
+### Free and Starter vs. Pro
 
-- **Starter** (one configured key): one execution attempt. A failure
+Run Task works on every plan, including Free.
+
+- **Free and Starter** (one configured key): one execution attempt. A failure
   (invalid key, rate limit, network/provider error, or a request that times
   out after 60s with no response) is reported clearly — no automatic retry.
 - **Pro** (multiple configured keys, via **Modelglass: Add Provider API
@@ -149,7 +151,7 @@ the run.
   categories that fall back to a qualitative capability rating (those
   already land on cheapest-among-the-top-rating-tier by default, since a
   coarse rating scale ties far more often than a continuous benchmark
-  score). A Starter user with a `routing-rules.json` present, or attempting
+  score). A Free or Starter user with a `routing-rules.json` present, or attempting
   to configure more than one provider key, gets a clear upgrade prompt
   rather than a silent failure.
 
@@ -240,7 +242,7 @@ Modelglass API key the first time you run a command, stored in VS Code's
 Look in the **Modelglass** output channel (View → Output) to confirm it
 provisioned successfully. If the API is unreachable, it offers to retry or
 let you enter a key manually instead. This free Modelglass key is what
-**Run Task** also checks against to determine Pro vs Starter access — it's
+**Run Task** also checks against to tell Pro from Free and Starter. It's
 the same key, not a separate credential.
 
 ### Provider API keys
@@ -249,7 +251,7 @@ the same key, not a separate credential.
 — these are entirely separate from the free Modelglass key above, and are
 never sent to Modelglass, only to the provider itself.
 
-- **Modelglass: Set Provider API Key** — the Starter flow: pick a provider,
+- **Modelglass: Set Provider API Key** — the Free and Starter flow: pick a provider,
   paste its key. Exclusive — setting a new provider's key replaces
   whichever one was configured before (with a confirmation warning).
 - **Modelglass: Add Provider API Key** — the Pro flow: pick a provider,
@@ -278,7 +280,7 @@ today") right on each provider option, before you even paste a key.
 | **Modelglass: Run Task on Cheapest Capable Model** | Prompts for a task category and description, then *executes* the call against the top-ranked model using your own configured provider key(s). See [Run Task](#run-task-on-cheapest-capable-model) above. |
 | **Modelglass: Compare Two Models** | Grounded migration diff between two models — pick a "from" model, then a "to" model (or the feed's own suggested competitors). Reports the unit-matched price delta and price *stability* (from the append-only price history), a per-dimension capability diff, billing-unit change warnings, and lifecycle checks, in the **Modelglass** Output panel. Works across image/llm/video/audio, and on every plan tier including Free. See [Compare Two Models](#compare-two-models) above. |
 | **Modelglass: Set API Key** | Enter an existing free Modelglass API key, or clear the stored one (forcing re-provisioning on next use). |
-| **Modelglass: Set Provider API Key** | Starter: store a single provider key (LLM execution), replacing any previous one. |
+| **Modelglass: Set Provider API Key** | Free and Starter: store a single provider key (LLM execution), replacing any previous one. |
 | **Modelglass: Add Provider API Key** | Pro: store an additional provider key alongside existing ones, for fallback chains. |
 | **Modelglass: Generate Video (Runway)** | Starter/Pro. Picks a Runway video model (ranked cheapest-first from the Modelglass feed), prompts for a text description (plus an input image/video file when the model needs one), submits the job, and polls to completion with a cancellable progress notification. See [Generate Video](#generate-video-runway) above. |
 | **Modelglass: Generate Audio (ElevenLabs)** | Starter/Pro. Choose Text to Speech (sync), Dub Audio/Video (async, polled with a cancellable progress notification), or Clone a Voice (Instant Voice Cloning, sync). See [Generate Audio](#generate-audio-elevenlabs) above. |

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+Docs: **Run Task works on the Free plan.** With a Free Modelglass key it runs
+on one provider key with one attempt, the same as Starter. Pro adds several
+keys with automatic fallback, and `.modelglass/routing-rules.json`. Earlier
+entries and the README called Run Task "Starter / Pro". The code has only
+ever checked for Pro (`pro-gate-lib.ts`). Video and audio generation are
+still Starter and Pro only.
+
 ## 0.7.1 (2026-10-29)
 
 Bug fix (SCO-835): **Switch Check's price history no longer calls a same-price
