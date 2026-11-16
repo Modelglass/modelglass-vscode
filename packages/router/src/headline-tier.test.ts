@@ -5,7 +5,8 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
 import * as PricingMath from "modelglass-router-examples/pricing-math";
-import { isHeadlineTier, NON_HEADLINE_UNITS } from "./headline-tier.js";
+import { isHeadlineTier, NON_HEADLINE_UNITS, type HasTierIdentity } from "./headline-tier.js";
+import { headlinePrice } from "./lib.js";
 
 describe("isHeadlineTier (SCO-646)", () => {
   test("accepts standard and context-length tiers", () => {
@@ -42,3 +43,38 @@ describe("NON_HEADLINE_UNITS (SCO-653)", () => {
     }
   });
 });
+
+describe("attributes.headline: false (ADR-0026)", () => {
+  const flaggedTiers: HasTierIdentity[] = [
+    { id: "image-output", attributes: { headline: false, token_modality: "image" }, pricing: [{ unit: "per_1m_tokens_output" }] },
+    { id: "standard", attributes: { headline: false }, pricing: [{ unit: "per_image" }] },
+    { id: "input", attributes: { headline: "false" }, pricing: [{ unit: "per_1m_tokens_input" }] },
+    { id: "batch-input", attributes: { headline: true }, pricing: [{ unit: "per_1m_tokens_input" }] },
+    { id: "input", attributes: { headline: true }, pricing: [{ unit: "per_1m_tokens_input" }] },
+  ];
+
+  test("a tier marked headline: false is never a headline price, whatever its unit or id", () => {
+    assert.equal(isHeadlineTier(flaggedTiers[0]!), false);
+    assert.equal(isHeadlineTier(flaggedTiers[1]!), false);
+  });
+
+  test("only the literal false counts, and headline: true overrides nothing", () => {
+    assert.equal(isHeadlineTier(flaggedTiers[2]!), true);
+    assert.equal(isHeadlineTier(flaggedTiers[3]!), false);
+    assert.equal(isHeadlineTier(flaggedTiers[4]!), true);
+  });
+
+  test("agrees with the pinned pricing-math (v0.9.0) on every flagged case", () => {
+    for (const t of flaggedTiers) assert.equal(isHeadlineTier(t), PricingMath.isHeadlineTier(t as never), t.id);
+  });
+
+  test("headlinePrice ranks on the text rate, not a cheaper flagged input rate", () => {
+    const row = (amount: number) => [{ amount, currency: "USD", unit: "per_1m_tokens_input", effective_from: "2026-01-01" }];
+    const tiers = [
+      { id: "audio-input", attributes: { headline: false, token_modality: "audio" }, pricing: row(0.5) },
+      { id: "input", pricing: row(2) },
+    ];
+    assert.equal(headlinePrice(tiers as never, "per_1m_tokens_input"), 2);
+  });
+});
+
