@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**Ready for token prices on image and video models (ADR-0026).** Some image
+and video models bill per token. Modelglass will list their token rates as
+extra tiers marked as not the headline price, while the provider's per-image or
+per-second price stays the one models are ranked on. The extension now honours
+that mark in **Run Task, Modelglass Chat, Route Task, Switch Check and Generate
+Video / Audio**, so a token rate can never become a model's price here. Nothing
+changes until those rates are added. Uses router-examples `pricing-math` v0.9.0
+(was v0.6.0).
+
 Docs: **Run Task works on the Free plan.** With a Free Modelglass key it runs
 on one provider key with one attempt, the same as Starter. Pro adds several
 keys with automatic fallback, and `.modelglass/routing-rules.json`. Earlier

@@ -244,3 +244,31 @@ describe("Runway Seedance 2.5 as live on /v1 (0.7.0 release check)", () => {
     assert.deepEqual(m!.price, { amount: 0.2, unit: "per_second", currency: "USD" });
   });
 });
+
+describe("tiers marked headline: false are never a routing price (ADR-0026)", () => {
+  // Gemini Omni 1.2 Flash's shape: Google publishes ~$0.07/s next to $12 per
+  // 1M output video tokens. The token tier is flagged and listed first, and
+  // here it's made the smaller number, so the cheapest-across-units pick
+  // would take it without the flag.
+  const omni: MediaModelEntry = {
+    model_id: "google-deepmind/gemini-omni-1.2-flash",
+    name: "Gemini Omni 1.2 Flash",
+    offerings: [
+      {
+        slug: "gemini-omni-1-2-flash-google-deepmind",
+        provider: "google-deepmind",
+        model: { id: "google-deepmind/gemini-omni-1.2-flash", modality: "text-to-video", status: "ga" },
+        tiers: [
+          { id: "video-output", attributes: { headline: false, token_modality: "video" }, pricing: [{ amount: 0.01, currency: "USD", unit: "per_1m_tokens_output", effective_from: "2026-01-01" }] },
+          { id: "standard", attributes: { price_basis: "vendor_estimate" }, pricing: [{ amount: 0.07, currency: "USD", unit: "per_second", effective_from: "2026-01-01" }] },
+        ],
+      },
+    ],
+  };
+
+  test("the offering's routing price is the per-second headline", () => {
+    const [m] = normaliseMediaOfferings(omni);
+    assert.deepEqual(m!.price, { amount: 0.07, unit: "per_second", currency: "USD" });
+  });
+});
+
