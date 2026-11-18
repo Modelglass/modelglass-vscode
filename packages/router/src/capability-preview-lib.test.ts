@@ -32,7 +32,9 @@ function makeModel(overrides: Partial<RoutableModel> & { name: string; provider:
 }
 
 function bench(benchmark: string, score: number) {
-  return { benchmark, score, source: { url: "https://example.test", type: "vendor" } };
+  // ADR-0027: the two banded categories read only their Vals AI harness rows.
+  const harness = benchmark === "vibe-code-bench" ? "openhands" : benchmark === "terminal-bench-4-0" ? "mini-swe-agent" : undefined;
+  return { benchmark, score, ...(harness ? { harness } : {}), source: { url: "https://example.test", type: "vendor" } };
 }
 
 describe("previewProviderCapabilities", () => {
@@ -80,8 +82,8 @@ describe("previewProviderCapabilities", () => {
       provider: "openai",
       benchmarks: [
         bench("swe-bench-pro", 0.9),
-        bench("aider-polyglot", 0.8),
-        bench("terminal-bench-2-1", 0.7),
+        bench("vibe-code-bench", 0.8),
+        bench("terminal-bench-4-0", 0.7),
         bench("bigcodebench", 0.6),
       ],
       capability: new Map([
@@ -90,8 +92,8 @@ describe("previewProviderCapabilities", () => {
         ["speed", "strong"],
       ]),
     });
-    // terminal-cli only accepts the terminus-2 harness — add that explicitly.
-    fullyCovered.benchmarks[2] = { ...fullyCovered.benchmarks[2]!, harness: "terminus-2" };
+    // terminal-cli only accepts Vals AI's Mini-SWE-agent rows (ADR-0027) — set it explicitly.
+    fullyCovered.benchmarks[2] = { ...fullyCovered.benchmarks[2]!, harness: "mini-swe-agent" };
 
     const preview = previewProviderCapabilities([fullyCovered], "openai");
 
@@ -228,8 +230,8 @@ describe("summarizeCombinedCapabilityPreview", () => {
       provider: "openai",
       benchmarks: [
         bench("swe-bench-pro", 0.9),
-        bench("aider-polyglot", 0.8),
-        bench("terminal-bench-2-1", 0.7),
+        bench("vibe-code-bench", 0.8),
+        bench("terminal-bench-4-0", 0.7),
         bench("bigcodebench", 0.6),
       ],
       capability: new Map([
@@ -238,7 +240,7 @@ describe("summarizeCombinedCapabilityPreview", () => {
         ["speed", "strong"],
       ]),
     });
-    fullyCovered.benchmarks[2] = { ...fullyCovered.benchmarks[2]!, harness: "terminus-2" };
+    fullyCovered.benchmarks[2] = { ...fullyCovered.benchmarks[2]!, harness: "mini-swe-agent" };
 
     const combined = previewCombinedCapabilities([fullyCovered], ["openai"]);
     assert.match(summarizeCombinedCapabilityPreview(combined), /routable for all \d+ task categories/);
@@ -278,8 +280,8 @@ describe("shortCoverageLabel", () => {
       provider: "openai",
       benchmarks: [
         bench("swe-bench-pro", 0.7),
-        bench("aider-polyglot", 0.7),
-        bench("terminal-bench-2-1", 0.7),
+        bench("vibe-code-bench", 0.7),
+        bench("terminal-bench-4-0", 0.7),
         bench("bigcodebench", 0.7),
       ],
       capability: new Map([
@@ -288,7 +290,7 @@ describe("shortCoverageLabel", () => {
         ["speed", "strong"],
       ]),
     });
-    fullyCovered.benchmarks[2] = { ...fullyCovered.benchmarks[2]!, harness: "terminus-2" };
+    fullyCovered.benchmarks[2] = { ...fullyCovered.benchmarks[2]!, harness: "mini-swe-agent" };
     fullyCovered.benchmarks[3] = { ...fullyCovered.benchmarks[3]!, variant: "hard" };
 
     const preview = previewProviderCapabilities([fullyCovered], "openai");

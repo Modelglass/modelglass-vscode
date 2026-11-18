@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**New code generation and terminal tasks rank on live boards, in tie bands.**
+Run Task, Modelglass Chat and Route Task now rank new code generation on Vals
+AI's Vibe Code Bench and terminal / CLI work on Vals AI's Terminal-Bench 4.0
+(they replace Aider Polyglot / LiveCodeBench and Terminal-Bench 2.1, which stopped
+adding new models). Models within measurement error of the band's top model,
+and within 3 points of it, count as tied, and the cheapest goes first, the
+same rule as Modelglass's route_task. A `minScore` in
+`.modelglass/routing-rules.json` still applies first.
+
 **Preview models are no longer picked for coding tasks.** Run Task, Modelglass
 Chat and Route Task skip a model whose status is preview (today Gemini 3.1 Pro,
 Mistral Large 4, Muse Wonder and Step 5 Preview), because a preview model can

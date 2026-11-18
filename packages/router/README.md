@@ -94,19 +94,22 @@ needed.**
 Executes a task against your own configured provider key(s) — a fully
 client-side, BYOK router with no Modelglass proxy in the request path. Ranks
 your configured provider's models against Modelglass's live
-benchmark/capability feed (SWE-bench Pro/Verified, Terminal-Bench 2.1, Aider
-Polyglot/LiveCodeBench, or BigCodeBench, depending on category — with a
+benchmark/capability feed (SWE-bench Pro/Verified, Vals AI's Vibe Code Bench
+and Terminal-Bench 4.0, or BigCodeBench, depending on category — with a
 qualitative capability-rating fallback for categories no benchmark covers
 well) and **calls the cheapest model that still clears a quality bar**, using
 your own key — not simply the highest-scoring one regardless of price,
 matching this command's own name. Supports OpenAI, Anthropic, DeepSeek, xAI,
 Mistral, Groq, Together AI, and OpenRouter.
 
-Each of the five benchmark-scored categories has its own default bar
-(calibrated to that benchmark's real score range — e.g. 60% on SWE-bench
-Verified, 50% on Aider Polyglot); if every model in your configured
-provider(s) happens to fall below it, that's a sign the bar doesn't fit
-today's pool and the extension falls back to the highest-scoring model
+New code generation (Vibe Code Bench) and terminal / CLI work (Terminal-Bench
+4.0) rank in **tie bands**, the same rule as Modelglass's own route_task:
+models within measurement error of the band's top model, and within 3 points
+of it, count as tied, and the cheapest goes first. The other benchmark-scored
+categories each have their own default bar (calibrated to that benchmark's
+real score range — e.g. 60% on SWE-bench Verified); if every model in your
+configured provider(s) happens to fall below it, that's a sign the bar doesn't
+fit today's pool and the extension falls back to the highest-scoring model
 instead of reporting nothing. The feed is cached locally for ~5 minutes, so a
 brief Modelglass API blip doesn't block a Run Task call — a fetch failure
 past that window falls back to the last known-good feed instead of failing
