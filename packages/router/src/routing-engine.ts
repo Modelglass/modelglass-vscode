@@ -224,7 +224,7 @@ export function normaliseOfferings(m: ModelEntry): RoutableModel[] {
   // SCO-633: never route to a retired offering. A model whose every
   // offering is retired contributes nothing (NOT the zero-offering fallback
   // below, which exists for pricing-less entries, not dead ones).
-  const offerings = m.offerings.filter(isRoutableOffering);
+  const offerings = m.offerings.filter((o) => isRoutableOffering(o));
   if (m.offerings.length > 0 && offerings.length === 0) return [];
 
   if (offerings.length === 0) {

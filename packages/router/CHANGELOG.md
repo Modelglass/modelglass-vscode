@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**Preview models are no longer picked for coding tasks.** Run Task, Modelglass
+Chat and Route Task skip a model whose status is preview (today Gemini 3.1 Pro,
+Mistral Large 4, Muse Wonder and Step 5 Preview), because a preview model can
+change or be withdrawn without notice. This matches Modelglass's own
+route_task. Generate Video / Audio is unchanged.
+
 **Ready for token prices on image and video models (ADR-0026).** Some image
 and video models bill per token. Modelglass will list their token rates as
 extra tiers marked as not the headline price, while the provider's per-image or

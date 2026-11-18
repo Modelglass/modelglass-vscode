@@ -157,7 +157,8 @@ function currentTierPrice(tiers: MediaTier[]): { amount: number; unit: string; c
  *  — a model could in principle be hosted by more than one provider. */
 export function normaliseMediaOfferings(entry: MediaModelEntry): RoutableMediaModel[] {
   // SCO-633: retired offerings are never routable (see offering-status.ts).
-  return entry.offerings.filter(isRoutableOffering).map((offering) => ({
+  // SCO-897's preview exclusion is for the LLM paths only; media keeps them.
+  return entry.offerings.filter((o) => isRoutableOffering(o, { includePreview: true })).map((offering) => ({
     name: entry.name,
     slug: offering.slug,
     provider: offering.provider,

@@ -14,11 +14,24 @@
  * the registry marks it deprecated precisely so users can migrate on their
  * own schedule. Offerings with no `model.status` (older feed shapes, test
  * fixtures) are treated as routable.
+ *
+ * SCO-897 — a `preview` offering isn't routable by default either: a preview
+ * model can change or be withdrawn without notice. Same rule as the API's
+ * route_task (`withoutPreviewOfferings`, `include_preview` default false), so
+ * the two routers agree. Pass `{ includePreview: true }` to keep them; the
+ * video / audio path does, so media routing is unchanged.
  */
 export interface HasLifecycle {
   model?: { status?: string } | null;
 }
 
-export function isRoutableOffering(offering: HasLifecycle): boolean {
-  return offering.model?.status !== "retired";
+export interface RoutableOptions {
+  includePreview?: boolean;
+}
+
+export function isRoutableOffering(offering: HasLifecycle, options: RoutableOptions = {}): boolean {
+  const status = offering.model?.status;
+  if (status === "retired") return false;
+  if (status === "preview" && !options.includePreview) return false;
+  return true;
 }
