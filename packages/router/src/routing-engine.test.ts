@@ -26,6 +26,7 @@ import {
   rankNewCodeGeneration,
   rankRefactor,
   rankTerminalCli,
+  tiesWithAnchor,
   rankTestGen,
   type ModelEntry,
   type Offering,
@@ -55,7 +56,7 @@ function makeModel(overrides: Partial<RoutableModel> & { name: string }): Routab
   };
 }
 
-function bench(benchmark: string, score: number, extra: Partial<{ variant: string; harness: string }> = {}) {
+function bench(benchmark: string, score: number, extra: Partial<{ variant: string; harness: string; stderr: number }> = {}) {
   return { benchmark, score, source: { url: "https://example.test", type: "vendor" }, ...extra };
 }
 
@@ -366,223 +367,128 @@ describe("rankBugFix minScore", () => {
 });
 
 describe("rankTerminalCli minScore", () => {
-  test("composes with the harness-comparability exclusion — a native-harness score stays excluded for its own reason, unaffected by the bar", () => {
-    const terminus2Weak = makeModel({
-      name: "Terminus2Weak",
-      benchmarks: [bench("terminal-bench-2-1", 0.3, { harness: "terminus-2" })],
-    });
-    const nativeHarness = makeModel({
-      name: "NativeHarness",
-      benchmarks: [bench("terminal-bench-2-1", 0.9, { harness: "native" })],
-    });
+  test("an explicit minScore still filters before banding, and an off-harness score stays excluded for its own reason", () => {
+    const weak = makeModel({ name: "Weak", benchmarks: [bench("terminal-bench-4-0", 0.3, { harness: "mini-swe-agent", stderr: 0.02 })] });
+    const offHarness = makeModel({ name: "OffHarness", benchmarks: [bench("terminal-bench-4-0", 0.9, { harness: "terminus-2" })] });
+    const strong = makeModel({ name: "Strong", benchmarks: [bench("terminal-bench-4-0", 0.6, { harness: "mini-swe-agent", stderr: 0.02 })] });
 
-    const { ranked, excluded } = rankTerminalCli([terminus2Weak, nativeHarness], 0.5);
+    const { ranked, excluded } = rankTerminalCli([weak, offHarness, strong], 0.5);
 
-    assert.equal(ranked.length, 0);
+    assert.deepEqual(ranked.map((r) => r.model.name), ["Strong"]);
     assert.equal(excluded.length, 2);
-    assert.ok(excluded.some((e) => e.model.name === "NativeHarness" && e.reason.includes("not comparable")));
-    assert.ok(excluded.some((e) => e.model.name === "Terminus2Weak" && e.reason.includes("minScore")));
+    assert.ok(excluded.some((e) => e.model.name === "OffHarness" && e.reason.includes("not comparable")));
+    assert.ok(excluded.some((e) => e.model.name === "Weak" && e.reason.includes("minScore")));
   });
 });
 
 // ---------------------------------------------------------------------------
-// 3.2 New code generation — clean mapping (Aider preferred, LCB fallback)
+// 3.2 / 3.3 — tie bands (ADR-0027 §6), the same cases as Modelglass's
+// route_task tests (modelglass #1027)
 // ---------------------------------------------------------------------------
 
-describe("rankNewCodeGeneration", () => {
-  test("prefers Aider Polyglot over LiveCodeBench when both present", () => {
-    const model = makeModel({
-      name: "Both",
-      benchmarks: [bench("aider-polyglot", 0.7), bench("livecodebench", 0.95)],
+describe("tie bands: new-code-generation (Vibe Code Bench) and terminal-cli (Terminal-Bench 4.0)", () => {
+  const vcb = (name: string, score: number, stderr: number | undefined, price: number) =>
+    makeModel({
+      name,
+      inputPricePerM: price,
+      benchmarks: [bench("vibe-code-bench", score, { harness: "openhands", ...(stderr === undefined ? {} : { stderr }) })],
     });
-    const { ranked } = rankNewCodeGeneration([model]);
-    assert.equal(ranked[0]!.score, 0.7);
-    assert.match(ranked[0]!.scoreLabel, /Aider Polyglot/);
-  });
-
-  test("falls back to LiveCodeBench when Aider Polyglot is absent", () => {
-    const model = makeModel({ name: "LCB only", benchmarks: [bench("livecodebench", 0.5)] });
-    const { ranked } = rankNewCodeGeneration([model]);
-    assert.equal(ranked[0]!.score, 0.5);
-    assert.match(ranked[0]!.scoreLabel, /LiveCodeBench 50\.0%.*no Aider Polyglot/);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 3.3 Terminal / CLI — harness comparability is the real behaviour to test
-// ---------------------------------------------------------------------------
-
-describe("rankTerminalCli", () => {
-  test("ranks Terminus-2-harness scores", () => {
-    const model = makeModel({ name: "T2", benchmarks: [bench("terminal-bench-2-1", 0.8, { harness: "terminus-2" })] });
-    const { ranked } = rankTerminalCli([model]);
-    assert.equal(ranked.length, 1);
-    assert.match(ranked[0]!.scoreLabel, /Terminus 2 harness/);
-  });
-
-  test("excludes a native-harness-only score rather than ranking it against Terminus-2 scores", () => {
-    const native = makeModel({
-      name: "Native only",
-      benchmarks: [bench("terminal-bench-2-1", 0.95, { harness: "claude-code-native" })],
+  const tb4 = (name: string, score: number, stderr: number | undefined, price: number) =>
+    makeModel({
+      name,
+      inputPricePerM: price,
+      benchmarks: [bench("terminal-bench-4-0", score, { harness: "mini-swe-agent", ...(stderr === undefined ? {} : { stderr }) })],
     });
-    const t2 = makeModel({ name: "T2", benchmarks: [bench("terminal-bench-2-1", 0.8, { harness: "terminus-2" })] });
-    const { ranked, excluded } = rankTerminalCli([native, t2]);
-    // The native-harness model's 0.95 must NOT outrank the Terminus-2 model's
-    // 0.80 — if it did, that would be exactly the "10+ pp harness gap"
-    // miscomparison the benchmark's own docs warn about.
-    assert.deepEqual(ranked.map((r) => r.model.name), ["T2"]);
-    assert.equal(excluded.length, 1);
-    assert.equal(excluded[0]!.model.name, "Native only");
-    assert.match(excluded[0]!.reason, /not comparable/);
+  const bands = (r: { ranked: { band?: number; model: RoutableModel }[] }) => r.ranked.map((x) => `${x.band}:${x.model.name}`);
+
+  test("tiesWithAnchor: statistical tie AND within 3 points", () => {
+    assert.equal(tiesWithAnchor({ score: 0.9, stderr: 0.01 }, { score: 0.88, stderr: 0.01 }), true);
+    assert.equal(tiesWithAnchor({ score: 0.9, stderr: 0.01 }, { score: 0.87, stderr: 0.01 }), false);
+    assert.equal(tiesWithAnchor({ score: 0.9, stderr: 0.03 }, { score: 0.865, stderr: 0.03 }), false);
+    assert.equal(tiesWithAnchor({ score: 0.9, stderr: 0.03 }, { score: 0.87, stderr: 0.03 }), true);
   });
 
-  test("a model with no Terminal-Bench score at all is unscored, not excluded", () => {
-    const { unscored, excluded } = rankTerminalCli([makeModel({ name: "None" })]);
-    assert.equal(unscored.length, 1);
-    assert.equal(excluded.length, 0);
+  test("a reported stderr of 0 is real: it narrows the test, and two zeros tie only an exact score", () => {
+    assert.equal(tiesWithAnchor({ score: 0.65, stderr: 0 }, { score: 0.635, stderr: 0.01 }), true);
+    assert.equal(tiesWithAnchor({ score: 0.65, stderr: 0 }, { score: 0.625, stderr: 0.01 }), false);
+    assert.equal(tiesWithAnchor({ score: 0.65, stderr: 0 }, { score: 0.649, stderr: 0 }), false);
+    const r = rankTerminalCli([tb4("top", 0.65, 0, 4), tb4("near", 0.635, 0.01, 2), tb4("far", 0.625, 0.01, 1)]);
+    assert.deepEqual(bands(r), ["1:near", "1:top", "2:far"]);
   });
-});
 
-// ---------------------------------------------------------------------------
-// 3.4 Library-aware feature work — BigCodeBench Hard preferred over Full
-// ---------------------------------------------------------------------------
+  test("a missing stderr falls back to strict order: it ties only an exact score", () => {
+    const r = rankNewCodeGeneration([vcb("top", 0.9, 0.02, 8), vcb("nose", 0.899, undefined, 1), vcb("same", 0.9, undefined, 2)]);
+    assert.deepEqual(bands(r), ["1:same", "1:top", "2:nose"]);
+    assert.match(r.ranked.find((x) => x.model.name === "nose")!.scoreLabel, /no standard error published/);
+  });
 
-describe("rankLibraryAwareFeatureWork", () => {
-  test("prefers the Hard variant over Full when both present", () => {
-    const model = makeModel({
-      name: "Both variants",
-      benchmarks: [bench("bigcodebench", 0.75, { variant: "full" }), bench("bigcodebench", 0.55, { variant: "hard" })],
+  test("an exact tie at the top: higher score, then lower price, then model id picks the anchor", () => {
+    const r = rankTerminalCli([tb4("pricey", 0.6515, 0.0231, 8), tb4("cheap", 0.6515, 0, 4), tb4("close", 0.6414, 0.0101, 2), tb4("tight", 0.6315, 0.009, 2)]);
+    assert.deepEqual(bands(r), ["1:close", "1:cheap", "1:pricey", "2:tight"]);
+    const s = rankNewCodeGeneration([vcb("b", 0.9, 0.01, 2), vcb("a", 0.9, 0.01, 2)]);
+    assert.deepEqual(bands(s), ["1:a", "1:b"]);
+  });
+
+  test("a model that ties statistically but sits more than 3 points behind stays out of band 1", () => {
+    // Haiku 5.5 vs Fable 5.2 on Vibe Code Bench (2026-11-16 board).
+    const r = rankNewCodeGeneration([vcb("fable", 0.9377, 0.0115, 8), vcb("haiku", 0.9044, 0.0173, 0.1)]);
+    assert.deepEqual(bands(r), ["1:fable", "2:haiku"]);
+  });
+
+  test("the 3-point rule applies in band 2 too", () => {
+    const r = rankNewCodeGeneration([vcb("top", 0.95, 0.005, 5), vcb("second", 0.9, 0.03, 5), vcb("stat-tie-far", 0.86, 0.03, 0.1), vcb("near", 0.88, 0.03, 1)]);
+    assert.deepEqual(bands(r), ["1:top", "2:near", "2:second", "3:stat-tie-far"]);
+  });
+
+  test("bands are anchored, not chained, and cheapest first inside each band", () => {
+    const r = rankNewCodeGeneration([vcb("a", 0.9, 0.01, 10), vcb("b", 0.885, 0.01, 1), vcb("c", 0.87, 0.01, 0.5)]);
+    assert.deepEqual(bands(r), ["1:b", "1:a", "2:c"]);
+  });
+
+  test("only the evaluator's harness counts: off-harness rows are excluded (terminal-cli) or unscored (new-code-generation)", () => {
+    const off = makeModel({ name: "Off", benchmarks: [bench("terminal-bench-4-0", 0.7, { harness: "terminus-2" })] });
+    const r = rankTerminalCli([off]);
+    assert.equal(r.ranked.length, 0);
+    assert.match(r.excluded[0]!.reason, /not comparable/);
+    assert.deepEqual(rankNewCodeGeneration([off]).unscored.map((m) => m.name), ["Off"]);
+  });
+
+  test("the old inputs (Aider Polyglot, LiveCodeBench, Terminal-Bench 2.1) no longer rank", () => {
+    const old = makeModel({
+      name: "Old",
+      benchmarks: [bench("aider-polyglot", 0.7), bench("livecodebench", 0.9), bench("terminal-bench-2-1", 0.8, { harness: "terminus-2" })],
     });
-    const { ranked } = rankLibraryAwareFeatureWork([model]);
-    assert.equal(ranked[0]!.score, 0.55);
-    assert.match(ranked[0]!.scoreLabel, /BigCodeBench Hard/);
+    assert.deepEqual(rankNewCodeGeneration([old]).unscored.map((m) => m.name), ["Old"]);
+    assert.deepEqual(rankTerminalCli([old]).unscored.map((m) => m.name), ["Old"]);
   });
 
-  test("falls back to Full when Hard is absent", () => {
-    const model = makeModel({ name: "Full only", benchmarks: [bench("bigcodebench", 0.75, { variant: "full" })] });
-    const { ranked } = rankLibraryAwareFeatureWork([model]);
-    assert.equal(ranked[0]!.score, 0.75);
-    assert.match(ranked[0]!.scoreLabel, /no Hard-variant/);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 3.5 Refactor — the benchmark-then-capability cascade
-// ---------------------------------------------------------------------------
-
-describe("rankRefactor", () => {
-  test("a SWE-bench-scored model always outranks a capability-only model, regardless of raw numbers", () => {
-    // Deliberately picked so a naive shared-axis sort would get this backwards:
-    // 0.4 (a weak SWE-bench score) vs. "strong" capability rating, which
-    // ratingValue() would represent as 2 — if these were sorted on one axis,
-    // the capability-only model would wrongly win.
-    const benchmarked = makeModel({ name: "Weak SWE-bench", benchmarks: [bench("swe-bench-verified", 0.4)] });
-    const capabilityOnly = makeModel({ name: "Strong capability only", capability: new Map([["coding", "strong"]]) });
-    const { ranked } = rankRefactor([capabilityOnly, benchmarked]);
-    assert.deepEqual(ranked.map((r) => r.model.name), ["Weak SWE-bench", "Strong capability only"]);
-    assert.equal(ranked[0]!.scoreKind, "benchmark");
-    assert.equal(ranked[1]!.scoreKind, "capability-rating");
+  test("other categories carry no band", () => {
+    const m = makeModel({ name: "M", benchmarks: [bench("swe-bench-pro", 0.6, { stderr: 0.02 })] });
+    assert.equal(rankBugFix([m]).ranked[0]!.band, undefined);
   });
 
-  test("a model with neither signal is unscored", () => {
-    const { ranked, unscored } = rankRefactor([makeModel({ name: "Nothing" })]);
-    assert.equal(ranked.length, 0);
-    assert.equal(unscored.length, 1);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 3.6 / 3.9 Fallback categories — autocomplete's inverted priority is the
-// one most likely to regress silently, so it gets the deepest coverage.
-// ---------------------------------------------------------------------------
-
-describe("rankAutocomplete", () => {
-  test("ranks primarily on capability_profile.speed, not on coding benchmark strength", () => {
-    // A model with a stronger SWE-bench score but slower `speed` rating must
-    // still lose to a faster model — this is the taxonomy's explicitly
-    // inverted axis, the one bug that would be easy to introduce by copying
-    // rankBugFix's pattern without re-reading the spec.
-    const slowButStrongCoder = makeModel({
-      name: "Slow strong coder",
-      benchmarks: [bench("swe-bench-pro", 0.9)],
-      capability: new Map([["speed", "weak"], ["coding", "strong"]]),
-    });
-    const fast = makeModel({
-      name: "Fast",
-      benchmarks: [bench("swe-bench-pro", 0.3)],
-      capability: new Map([["speed", "strong"], ["coding", "weak"]]),
-    });
-    const { ranked } = rankAutocomplete([slowButStrongCoder, fast]);
-    assert.deepEqual(ranked.map((r) => r.model.name), ["Fast", "Slow strong coder"]);
-  });
-
-  test("ties on speed break cheapest-price-first, then coding rating as a final tie-break only", () => {
-    const a = makeModel({
-      name: "A",
-      capability: new Map([["speed", "strong"], ["coding", "weak"]]),
-      inputPricePerM: 5,
-    });
-    const b = makeModel({
-      name: "B",
-      capability: new Map([["speed", "strong"], ["coding", "strong"]]),
-      inputPricePerM: 1,
-    });
-    const { ranked } = rankAutocomplete([a, b]);
-    // Same speed rating -> price decides (B cheaper), even though A has a
-    // worse coding rating than B — coding is the LAST tie-break, not first.
-    assert.deepEqual(ranked.map((r) => r.model.name), ["B", "A"]);
-  });
-
-  test("a model with no speed rating is unscored even if it has a coding rating", () => {
-    const model = makeModel({ name: "No speed rating", capability: new Map([["coding", "strong"]]) });
-    const { ranked, unscored } = rankAutocomplete([model]);
-    assert.equal(ranked.length, 0);
-    assert.equal(unscored.length, 1);
-  });
-});
-
-describe("rankTestGen / rankDocGen — no-benchmark fallback categories", () => {
-  test("test-gen ranks by capability_profile.coding, never by Aider Polyglot despite the shape looking similar", () => {
-    const model = makeModel({
-      name: "Aider-scored but not coding-rated",
-      benchmarks: [bench("aider-polyglot", 0.95)],
-    });
-    const { ranked, unscored } = rankTestGen([model]);
-    // The taxonomy is explicit that Aider Polyglot is the WRONG shape for
-    // test-gen (inverse task) — a model scored only on Aider Polyglot, with
-    // no capability_profile.coding rating, must NOT be ranked by that score.
-    assert.equal(ranked.length, 0);
-    assert.equal(unscored.length, 1);
-  });
-
-  test("doc-gen ranks by capability_profile.instruction-following", () => {
-    const strong = makeModel({ name: "Strong writer", capability: new Map([["instruction-following", "strong"]]) });
-    const weak = makeModel({ name: "Weak writer", capability: new Map([["instruction-following", "weak"]]) });
-    const { ranked } = rankDocGen([weak, strong]);
-    assert.deepEqual(ranked.map((r) => r.model.name), ["Strong writer", "Weak writer"]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 3.10 Agentic multi-step — composite decomposition, not its own leaf metric
-// ---------------------------------------------------------------------------
-
-describe("rankAgenticMultiStep", () => {
-  test("fans out each subtask to its own category's ranking rather than scoring the task holistically", () => {
-    const bugFixSpecialist = makeModel({ name: "Bug-fix specialist", benchmarks: [bench("swe-bench-pro", 0.8)] });
-    const docSpecialist = makeModel({ name: "Doc specialist", capability: new Map([["instruction-following", "strong"]]) });
-    const models = [bugFixSpecialist, docSpecialist];
-
-    const results = rankAgenticMultiStep(models, [
-      { id: "step-1", category: "bug-fix" },
-      { id: "step-2", category: "doc-gen" },
+  test("snapshot: today's bands from the 2026-11-16 Vals AI boards (current-generation models)", () => {
+    const vcbRows: [string, number, number, number][] = [
+      ["Claude Fable 5.2", 0.93771, 0.01152, 8], ["Claude Sonnet 5.5", 0.92392, 0.0126, 2], ["Gemini 4 Argon", 0.91907, 0.01899, 2],
+      ["Claude Haiku 5.5", 0.90444, 0.01725, 0.1], ["Claude Opus 5.5", 0.90289, 0.01531, 4], ["GPT-6.2 Astra", 0.89898, 0.0204, 8],
+      ["Gemini 4 Carbon", 0.89061, 0.02291, 2], ["Gemini 4 Hydrogen", 0.87782, 0.02288, 1.5], ["GPT-6.2 Sol", 0.87616, 0.02195, 2],
+      ["Grok 4.7", 0.86172, 0.0218, 2],
+    ];
+    const r = rankNewCodeGeneration(vcbRows.map(([n, s, e, p]) => vcb(n, s, e, p)));
+    assert.deepEqual(bands(r).filter((b) => /^[12]:/.test(b)), [
+      "1:Claude Sonnet 5.5", "1:Gemini 4 Argon", "1:Claude Fable 5.2",
+      "2:Claude Haiku 5.5", "2:Gemini 4 Hydrogen", "2:Gemini 4 Carbon", "2:GPT-6.2 Sol", "2:Claude Opus 5.5", "2:GPT-6.2 Astra",
     ]);
-
-    assert.equal(results.length, 2);
-    const step1 = results.find((r) => r.subtaskId === "step-1")!;
-    const step2 = results.find((r) => r.subtaskId === "step-2")!;
-    assert.equal(step1.ranking.ranked[0]!.model.name, "Bug-fix specialist");
-    assert.equal(step2.ranking.ranked[0]!.model.name, "Doc specialist");
+    const tbRows: [string, number, number, number][] = [
+      ["Claude Fable 5.2", 0.65152, 0.02314, 8], ["Claude Opus 5.5", 0.65152, 0, 4], ["Claude Sonnet 5.5", 0.64141, 0.0101, 2],
+      ["Kimi K3.1 Pro", 0.63636, 0.0175, 2], ["Gemini 4 Carbon", 0.63131, 0.02201, 2], ["GPT-6.2 Astra", 0.63131, 0.01336, 8],
+      ["GPT-6.2 Sol", 0.60606, 0, 2], ["Gemini 4 Argon", 0.57576, 0.02314, 2],
+    ];
+    const t = rankTerminalCli(tbRows.map(([n, s, e, p]) => tb4(n, s, e, p)));
+    assert.deepEqual(bands(t).filter((b) => /^[12]:/.test(b)), [
+      "1:Claude Sonnet 5.5", "1:Kimi K3.1 Pro", "1:Gemini 4 Carbon", "1:Claude Opus 5.5", "1:Claude Fable 5.2", "1:GPT-6.2 Astra",
+      "2:GPT-6.2 Sol",
+    ]);
   });
 });
 
@@ -596,8 +502,8 @@ describe("rankModelsForCategory", () => {
       name: "All-rounder",
       benchmarks: [
         bench("swe-bench-pro", 0.6),
-        bench("aider-polyglot", 0.6),
-        bench("terminal-bench-2-1", 0.6, { harness: "terminus-2" }),
+        bench("vibe-code-bench", 0.6, { harness: "openhands" }),
+        bench("terminal-bench-4-0", 0.6, { harness: "mini-swe-agent" }),
         bench("bigcodebench", 0.6, { variant: "hard" }),
       ],
       capability: new Map([

@@ -40,6 +40,9 @@ export interface BenchmarkScore {
   score: number; // 0-1 fraction
   variant?: string;
   harness?: string;
+  /** Evaluator's standard error, same 0-1 scale as `score` (ADR-0027 §6).
+   *  0 is a real reading; absent means none was published. */
+  stderr?: number;
   source: { url: string; type: string };
 }
 
@@ -297,6 +300,9 @@ export interface RankedModel {
    *  comment already gives for why minScore is a no-op there). Not meant to
    *  be read by any caller outside this file. */
   defaultMinScoreKey?: string;
+  /** Tie band, 1 = top (ADR-0027 §6). Set only for new-code-generation and
+   *  terminal-cli, which rank in tie bands like Modelglass's route_task. */
+  band?: number;
 }
 
 export interface CategoryRanking {
@@ -356,15 +362,9 @@ const DEFAULT_MIN_SCORE_BY_BENCHMARK: Record<string, number> = {
   // qualify alongside pricier 90%+ models — the concrete case SCO-329's
   // review named.
   "swe-bench-verified": 0.6,
-  // 15.6%-72% in the live feed (5 models) — 0.5 excludes only the clear
-  // outlier (Llama 4 Maverick, 15.6%), keeping the rest (53.3%-72%) in play.
-  "aider-polyglot": 0.5,
-  // 43.4%-72.8% in the live feed (4 models) — same reasoning as Aider
-  // Polyglot; 0.5 excludes only Llama 4 Maverick (43.4%).
-  livecodebench: 0.5,
-  // 67%-80.4% in the live feed (2 models, Terminus-2 harness only) — 0.6
-  // keeps both in play, same shape as swe-bench-pro above.
-  "terminal-bench-2-1": 0.6,
+  // new-code-generation (Vibe Code Bench) and terminal-cli (Terminal-Bench
+  // 4.0) have no default bar: they rank in tie bands instead (rankInBands,
+  // ADR-0027 §6), the same rule as Modelglass's route_task.
   // LOW-CONFIDENCE PLACEHOLDER: the live feed has ZERO current-gen models
   // with a BigCodeBench score at all (its dataset hasn't been updated
   // since April 2025 — see capability-preview-lib.ts's
@@ -501,69 +501,118 @@ export function rankBugFix(models: RoutableModel[], minScore?: number): Category
   }, minScore);
 }
 
-// --- 3.2 New code generation (spec -> code, greenfield) -------------------
-// Clean mapping: Aider Polyglot preferred (closer to typical application
-// code across a broad language set), falling back to LiveCodeBench (skews
-// algorithmic/competitive-programming — the taxonomy's stated reason to
-// prefer Aider when both exist).
-export function rankNewCodeGeneration(models: RoutableModel[], minScore?: number): CategoryRanking {
-  return rankByBenchmark("new-code-generation", models, (m) => {
-    const aider = benchmarkScore(m, "aider-polyglot");
-    if (aider) return { score: aider.score, label: `Aider Polyglot ${(aider.score * 100).toFixed(1)}%`, defaultMinScoreKey: "aider-polyglot" };
-    const lcb = benchmarkScore(m, "livecodebench");
-    if (lcb) {
-      return {
-        score: lcb.score,
-        label: `LiveCodeBench ${(lcb.score * 100).toFixed(1)}% (no Aider Polyglot score available)`,
-        defaultMinScoreKey: "livecodebench",
-      };
-    }
-    return null;
-  }, minScore);
+// --- Tie bands (ADR-0027 §6, SCO-897) -------------------------------------
+// Same rule as Modelglass's route_task (packages/api/src/mcp/routing.ts,
+// rankInBands / tiesWithAnchor), so a band here means the same thing:
+//  - two models tie when |a − b| ≤ 1.96 × √(seₐ² + se_b²) AND the lower one
+//    is within 3 points (0.03) of the band's anchor, in every band;
+//  - a reported stderr of 0 is real; a missing one means strict order (ties
+//    only an exact score);
+//  - anchored, no chaining: the highest score left (then cheaper, then
+//    model id) anchors a band and takes every remaining model that ties it;
+//  - cheapest first inside a band, then higher score, then model id.
+// An explicit minScore (routing-rules.json) still applies first, as a
+// filter; there's no default bar for these two categories.
+export const BAND_Z = 1.96;
+export const BAND_MAX_GAP = 0.03;
+const GAP_EPSILON = 1e-9;
+
+export function tiesWithAnchor(
+  anchor: { score: number; stderr?: number },
+  other: { score: number; stderr?: number },
+): boolean {
+  if (anchor.score === other.score) return true;
+  if (anchor.stderr === undefined || other.stderr === undefined) return false;
+  const gap = Math.abs(anchor.score - other.score);
+  if (gap > BAND_MAX_GAP + GAP_EPSILON) return false;
+  return gap <= BAND_Z * Math.hypot(anchor.stderr, other.stderr) + GAP_EPSILON;
 }
 
-// --- 3.3 Terminal / CLI / DevOps -------------------------------------------
-// Clean mapping: Terminal-Bench 2.1, but ONLY the Terminus-2-harness score —
-// terminal-bench-2-1.yaml's own notes document native-harness and
-// Terminus-2-harness scores as NOT comparable (10+ pp swings), so a model
-// with only a native-harness entry is excluded here with a stated reason
-// rather than silently mixed into a ranking it would distort. This is a
-// default-rules scoring decision (which harness to trust), not a user
-// override — still in SCO-230's scope.
-export function rankTerminalCli(models: RoutableModel[], minScore?: number): CategoryRanking {
-  const ranked: RankedModel[] = [];
+function validStderr(se: unknown): number | undefined {
+  return typeof se === "number" && Number.isFinite(se) && se >= 0 ? se : undefined;
+}
+
+function bandLabel(name: string, score: number, stderr: number | undefined, harness: string): string {
+  const se = stderr === undefined ? "no standard error published" : `± ${(stderr * 100).toFixed(2)}`;
+  return `${name} ${(score * 100).toFixed(2)}% (${se}; ${harness} harness, Vals AI)`;
+}
+
+function rankInBands(
+  category: TaskCategory,
+  models: RoutableModel[],
+  benchmarkId: string,
+  harness: string,
+  displayName: string,
+  harnessLabel: string,
+  minScore?: number,
+): CategoryRanking {
+  type Row = { model: RoutableModel; score: number; stderr?: number; price: number };
+  const rows: Row[] = [];
   const excluded: { model: RoutableModel; reason: string }[] = [];
   const unscored: RoutableModel[] = [];
   for (const m of models) {
-    const matches = m.benchmarks.filter((b) => b.benchmark === "terminal-bench-2-1");
-    if (!matches.length) {
-      unscored.push(m);
+    const matches = m.benchmarks.filter((b) => b.benchmark === benchmarkId);
+    const row = matches.find((b) => b.harness === harness);
+    if (!row) {
+      if (matches.length) {
+        excluded.push({
+          model: m,
+          reason: `only has a ${matches[0]!.harness ?? "unspecified"}-harness ${displayName} score, not comparable to Vals AI's ${harnessLabel} rows`,
+        });
+      } else {
+        unscored.push(m);
+      }
       continue;
     }
-    const terminus2 = matches.find((b) => b.harness === "terminus-2");
-    if (terminus2) {
-      ranked.push({
-        model: m,
-        score: terminus2.score,
-        scoreKind: "benchmark",
-        scoreLabel: `Terminal-Bench 2.1 ${(terminus2.score * 100).toFixed(1)}% (Terminus 2 harness)`,
-        defaultMinScoreKey: "terminal-bench-2-1",
-      });
-    } else {
+    const stderr = validStderr(row.stderr);
+    if (minScore !== undefined && row.score < minScore) {
       excluded.push({
         model: m,
-        reason: `only has a native-harness (${matches[0]!.harness ?? "unspecified"}) Terminal-Bench 2.1 score — ` +
-          "not comparable to Terminus-2-harness scores, per the benchmark's own documented 10+ pp harness gap",
+        reason: `below the minScore quality bar (${bandLabel(displayName, row.score, stderr, harnessLabel)} < required ${(minScore * 100).toFixed(0)}%)`,
+      });
+      continue;
+    }
+    rows.push({ model: m, score: row.score, stderr, price: m.inputPricePerM ?? Infinity });
+  }
+  const byId = (a: Row, b: Row) => {
+    const k = (r: Row) => `${r.model.modelId}\u0000${r.model.slug}`;
+    return k(a) < k(b) ? -1 : k(a) > k(b) ? 1 : 0;
+  };
+  let left = [...rows].sort((a, b) => b.score - a.score || a.price - b.price || byId(a, b));
+  const ranked: RankedModel[] = [];
+  let band = 0;
+  while (left.length) {
+    band++;
+    const anchor = left[0]!;
+    const members = left.filter((r) => r === anchor || tiesWithAnchor(anchor, r));
+    members.sort((a, b) => a.price - b.price || b.score - a.score || byId(a, b));
+    for (const r of members) {
+      ranked.push({
+        model: r.model,
+        score: r.score,
+        scoreKind: "benchmark",
+        scoreLabel: bandLabel(displayName, r.score, r.stderr, harnessLabel),
+        band,
       });
     }
+    left = left.filter((r) => !members.includes(r));
   }
+  return { category, ranked, excluded, unscored };
+}
 
-  // SCO-330: same quality-bar mechanism as rankByBenchmark
-  // (applyQualityBar), called directly here (not routed through that
-  // function) because this category's harness-exclusion pass above already
-  // needs its own bespoke loop.
-  const { ranked: finalRanked, excluded: barExcluded } = applyQualityBar(ranked, minScore);
-  return { category: "terminal-cli", ranked: finalRanked, excluded: [...excluded, ...barExcluded], unscored };
+// --- 3.2 New code generation (spec -> code, greenfield) -------------------
+// ADR-0027: Vals AI's Vibe Code Bench (OpenHands rows), in tie bands.
+// Replaces Aider Polyglot / LiveCodeBench, which stopped adding models.
+export function rankNewCodeGeneration(models: RoutableModel[], minScore?: number): CategoryRanking {
+  return rankInBands("new-code-generation", models, "vibe-code-bench", "openhands", "Vibe Code Bench", "OpenHands", minScore);
+}
+
+// --- 3.3 Terminal / CLI / DevOps -------------------------------------------
+// ADR-0027: Vals AI's Terminal-Bench 4.0 (Mini-SWE-agent rows), in tie
+// bands. Replaces Terminal-Bench 2.1 (Terminus 2), which was archived. A
+// model with only another harness's TB 4.0 row is excluded with a reason.
+export function rankTerminalCli(models: RoutableModel[], minScore?: number): CategoryRanking {
+  return rankInBands("terminal-cli", models, "terminal-bench-4-0", "mini-swe-agent", "Terminal-Bench 4.0", "Mini-SWE-agent", minScore);
 }
 
 // --- 3.4 Library/dependency-aware feature work -----------------------------
