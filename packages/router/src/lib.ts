@@ -190,7 +190,7 @@ export async function fetchLLMModels(apiKey: string): Promise<NormalisedModel[]>
   if (!json.ok) throw new Error("Modelglass API returned ok=false");
   // SCO-633: a model whose every offering is retired can't be routed to at all.
   return json.data
-    .filter((m) => m.offerings.length === 0 || m.offerings.some(isRoutableOffering))
+    .filter((m) => m.offerings.length === 0 || m.offerings.some((o) => isRoutableOffering(o)))
     .map(normalise);
 }
 
@@ -259,7 +259,7 @@ export function normalise(m: ModelEntry): NormalisedModel {
   const benchmarks = m.knowledge?.benchmarks;
   const { score: sweBenchVerified, source: sweBenchSource } = sweBenchVerifiedScore(benchmarks);
   const hasSweBenchPro = benchmarks?.some((b) => b.benchmark === "swe-bench-pro") ?? false;
-  const offering = [...m.offerings.filter(isRoutableOffering)].sort(
+  const offering = [...m.offerings.filter((o) => isRoutableOffering(o))].sort(
     (a, b) =>
       (headlinePrice(a.tiers, INPUT_UNIT) ?? Infinity) -
       (headlinePrice(b.tiers, INPUT_UNIT) ?? Infinity),
